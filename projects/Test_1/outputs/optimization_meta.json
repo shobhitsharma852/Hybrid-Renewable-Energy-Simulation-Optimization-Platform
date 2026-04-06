@@ -1,0 +1,24 @@
+{
+    "project_name": "Test_1",
+    "constraints_used": {
+        "max_annual_capacity_shortage_pct": 0.0,
+        "min_renewable_fraction_pct": 0.0,
+        "reserve_load_pct": 10.0,
+        "reserve_annual_peak_pct": 0.0,
+        "reserve_solar_pct": 80.0,
+        "reserve_wind_pct": 50.0,
+        "enforce_operating_reserve": true
+    },
+    "economic_assumptions_used": {
+        "project_life_years": 25.0,
+        "real_discount_rate_pct": 8.0,
+        "grid_purchase_price_per_kwh": 0.1,
+        "grid_export_price_per_kwh": 0.05
+    },
+    "total_raw_combinations": 16,
+    "total_valid_candidates": 14,
+    "total_filtered_out": 2,
+    "successful_runs": 14,
+    "failed_runs": 0,
+    "feasible_candidates": 14
+}

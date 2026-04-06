@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "name": "test 2",
+    "author": "Shobhit",
+    "description": ""
+  },
+  "location": {
+    "lat": 21.10025,
+    "lon": 70.35177,
+    "timezone": "Asia/Kolkata"
+  },
+  "economics": {
+    "discount_rate": 8.0,
+    "inflation_rate": 2.0,
+    "project_lifetime_years": 25,
+    "annual_capacity_shortage": 0.0
+  },
+  "version": "1.0"
+}

@@ -1,0 +1,20 @@
+{
+    "total_load_kwh": 8760000.0,
+    "total_served_load_kwh": 8760000.0,
+    "total_unmet_load_kwh": 2.1795898419441073e-12,
+    "total_excess_energy_kwh": 17168.55699710035,
+    "total_pv_generation_kwh": 4372429.264081537,
+    "total_wind_generation_kwh": 0.0,
+    "total_grid_import_kwh": 4710966.617908352,
+    "total_grid_export_kwh": 0.0,
+    "total_battery_charge_kwh": 969150.3807490248,
+    "total_battery_discharge_kwh": 832228.5720730097,
+    "total_battery_discharge_dc_kwh": 876030.0758663262,
+    "total_inverter_loss_kwh": 213107.02011008034,
+    "total_rectifier_loss_kwh": 0.0,
+    "renewable_fraction": 0.46180689332865943,
+    "gross_renewable_fraction": 0.49913576073990146,
+    "direct_renewable_to_load_kwh": 3216804.8100186386,
+    "renewable_from_battery_to_load_kwh": 828623.5755404177,
+    "renewable_served_to_load_kwh": 0.0
+}
