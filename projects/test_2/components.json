@@ -26,7 +26,7 @@
     },
     "orientation": {
       "enabled": true,
-      "ground_reflectance_pct": 20.0,
+      "ground_reflectance_pct": 0.0,
       "tracking_system": "no_tracking",
       "use_default_slope": true,
       "panel_slope_deg": null,

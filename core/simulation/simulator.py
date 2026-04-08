@@ -189,14 +189,12 @@ class HybridSystemSimulator:
             else 0.0
         )
 
-        # Air density from actual temperature: rho = rho_std * (T_std / (T + 273.15))
-        # Warmer air is less dense → turbines produce less power (HOMER applies this)
-        temperature_c = (
-            float(row["temperature"])
-            if "temperature" in resource_df.columns
-            else 15.0
-        )
-        air_density_kg_per_m3 = STANDARD_AIR_DENSITY_KG_PER_M3 * (288.15 / (temperature_c + 273.15))
+        # Air density: only apply temperature correction if the flag is enabled
+        if components.wind.consider_temperature_effects and "temperature" in resource_df.columns:
+            temperature_c = float(row["temperature"])
+            air_density_kg_per_m3 = STANDARD_AIR_DENSITY_KG_PER_M3 * (288.15 / (temperature_c + 273.15))
+        else:
+            air_density_kg_per_m3 = STANDARD_AIR_DENSITY_KG_PER_M3
 
         speed_points = components.wind.power_curve.wind_speed_points_mps
         power_points = components.wind.power_curve.power_output_points_kw

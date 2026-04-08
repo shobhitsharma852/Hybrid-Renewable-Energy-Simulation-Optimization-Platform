@@ -26,7 +26,7 @@
     },
     "orientation": {
       "enabled": true,
-      "ground_reflectance_pct": 20.0,
+      "ground_reflectance_pct": 0.0,
       "tracking_system": "no_tracking",
       "use_default_slope": true,
       "panel_slope_deg": null,
@@ -34,7 +34,7 @@
       "panel_azimuth_deg": null
     },
     "temperature": {
-      "enabled": true,
+      "enabled": false,
       "temperature_coefficient_pct_per_degC": -0.5,
       "nominal_operating_cell_temp_c": 45.0,
       "efficiency_stc_pct": 13.0
@@ -108,8 +108,8 @@
     }
   },
   "battery": {
-    "enabled": true,
-    "use_search_space": true,
+    "enabled": false,
+    "use_search_space": false,
     "battery_model_name": "Generic 1MWh Li-Ion",
     "quantity_options": [
       5
@@ -133,7 +133,7 @@
     "use_search_space": true,
     "converter_model_name": "System Converter",
     "capacity_kw_options": [
-      1000.0
+      300.0
     ],
     "capital_cost_per_kw": 300.0,
     "replacement_cost_per_kw": 300.0,
