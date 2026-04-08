@@ -102,27 +102,20 @@ def _normalize_irradiance_to_kw_per_m2(irradiance_value: float) -> float:
     """
     Normalize irradiance into kW/m².
 
-    Important:
-    Depending on the source, irradiance may be provided as:
-    - kW/m²   -> typical hourly average form (0 to ~1.2)
-    - W/m²    -> instantaneous/average form (0 to ~1200)
+    Assumption (FIXED for Case 1):
+    - All input irradiance is in W/m²
+    - Convert to kW/m²
 
-    Heuristic:
-    - if value > 5, treat as W/m² and divide by 1000
-    - else treat as kW/m² directly
-
-    This makes the module robust with your current data pipeline.
+    This removes all ambiguity and ensures consistency with NASA POWER
+    and HOMER inputs.
     """
     irradiance_value = _safe_float(irradiance_value, default=0.0)
 
-    if irradiance_value < 0.0:
+    if irradiance_value <= 0.0:
         return 0.0
 
-    if irradiance_value > 5.0:
-        return irradiance_value / 1000.0
-
-    return irradiance_value
-
+    # Always treat as W/m²
+    return irradiance_value / 1000.0
 
 def _extract_irradiance_from_row(row: pd.Series) -> float:
     """
@@ -149,7 +142,7 @@ def _extract_irradiance_from_row(row: pd.Series) -> float:
 
     for col in candidate_columns:
         if col in row.index:
-            return _normalize_irradiance_to_kw_per_m2(row[col])
+            return _safe_float(row[col], default=0.0)
 
     return 0.0
 

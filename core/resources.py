@@ -139,7 +139,7 @@ def _fetch_nasa_power_chunk(
         "start": start,
         "end": end,
         "format": "JSON",
-        "time-standard": "UTC",
+        "time-standard": "LST",
     }
 
     resp = requests.get(NASA_POWER_URL, params=params, timeout=timeout)

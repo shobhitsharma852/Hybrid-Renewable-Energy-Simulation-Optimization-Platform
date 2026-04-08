@@ -13,7 +13,12 @@ from .results import (
     SimulationResults,
     SimulationSummary,
 )
-from .wind_model import compute_wind_power_output
+from .wind_model import (
+    compute_wind_power_output,
+    DEFAULT_REFERENCE_HEIGHT_M,
+    DEFAULT_WIND_SHEAR_EXPONENT,
+    STANDARD_AIR_DENSITY_KG_PER_M3,
+)
 
 EPSILON: float = 1e-9
 
@@ -176,11 +181,22 @@ class HybridSystemSimulator:
         if quantity <= 0:
             return 0.0
 
+        row = resource_df.iloc[hour_index]
+
         wind_speed_ref_mps = (
-            float(resource_df.iloc[hour_index]["ws50m"])
+            float(row["ws50m"])
             if "ws50m" in resource_df.columns
             else 0.0
         )
+
+        # Air density from actual temperature: rho = rho_std * (T_std / (T + 273.15))
+        # Warmer air is less dense → turbines produce less power (HOMER applies this)
+        temperature_c = (
+            float(row["temperature"])
+            if "temperature" in resource_df.columns
+            else 15.0
+        )
+        air_density_kg_per_m3 = STANDARD_AIR_DENSITY_KG_PER_M3 * (288.15 / (temperature_c + 273.15))
 
         speed_points = components.wind.power_curve.wind_speed_points_mps
         power_points = components.wind.power_curve.power_output_points_kw
@@ -192,9 +208,9 @@ class HybridSystemSimulator:
             hub_height_m=components.wind.hub_height_m,
             speed_points=speed_points,
             power_points=power_points,
-            reference_height_m=50.0,
-            shear_exponent=0.14,
-            air_density_kg_per_m3=1.225,
+            reference_height_m=DEFAULT_REFERENCE_HEIGHT_M,
+            shear_exponent=DEFAULT_WIND_SHEAR_EXPONENT,
+            air_density_kg_per_m3=air_density_kg_per_m3,
             availability_losses_pct=losses.availability_losses_pct,
             turbine_performance_losses_pct=losses.turbine_performance_losses_pct,
             environmental_losses_pct=losses.environmental_losses_pct,
