@@ -390,9 +390,33 @@ def compute_pv_power_from_resource_row(
 ) -> PVPowerResult:
     """
     Compute PV power directly from one row of the resource dataframe.
+
+    If pv_config.orientation.use_clearness_index_cap is True AND the resource
+    row contains 'clearness_index' and 'g0_w_m2' columns (pre-computed by
+    add_clearness_index in resources.py), then effective GHI is computed as:
+
+        GHI_eff = min(Kt, kt_max) * G0
+
+    This replicates HOMER's internal GHI processing using the same EoT formula.
+    Otherwise raw GHI is used as-is.
     """
-    irradiance_input_value = _extract_irradiance_from_row(resource_row)
     ambient_temperature_c = _extract_ambient_temperature_from_row(resource_row)
+
+    orientation = pv_config.orientation
+    use_kt = (
+        orientation.use_clearness_index_cap
+        and "clearness_index" in resource_row.index
+        and "g0_w_m2" in resource_row.index
+    )
+
+    if use_kt:
+        kt     = _safe_float(resource_row["clearness_index"], default=0.0)
+        g0     = _safe_float(resource_row["g0_w_m2"], default=0.0)
+        kt_cap = float(orientation.kt_max)
+        # Effective GHI (W/m²) = capped Kt × G0
+        irradiance_input_value = min(kt, kt_cap) * g0
+    else:
+        irradiance_input_value = _extract_irradiance_from_row(resource_row)
 
     return compute_pv_power_for_timestep(
         irradiance_input_value=irradiance_input_value,

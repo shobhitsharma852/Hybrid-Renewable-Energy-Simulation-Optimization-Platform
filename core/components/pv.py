@@ -89,6 +89,14 @@ class PVOrientationSettings:
     use_default_azimuth: bool = True
     panel_azimuth_deg: float | None = None
 
+    # Clearness index cap (HOMER-style GHI processing):
+    # When True, G0 is computed using HOMER's EoT formula for each hour,
+    # Kt = GHI / G0 is capped at kt_max, and effective GHI = Kt_capped × G0.
+    # This removes physically impossible GHI values from NASA POWER data.
+    # Requires project lat/lon to be passed into SimulationInputs.
+    use_clearness_index_cap: bool = False
+    kt_max: float = 0.82
+
 
 @dataclass(frozen=True)
 class PVTemperatureSettings:

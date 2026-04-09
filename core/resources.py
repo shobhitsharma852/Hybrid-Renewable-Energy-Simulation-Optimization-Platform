@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -10,6 +11,9 @@ import requests
 
 NASA_POWER_URL = "https://power.larc.nasa.gov/api/temporal/hourly/point"
 NASA_HOURLY_MIN_YEAR = 2001
+
+# Solar constant (W/m²) — HOMER uses 1367
+SOLAR_CONSTANT_W_PER_M2: float = 1367.0
 
 
 @dataclass(frozen=True)
@@ -324,6 +328,10 @@ def monthly_boxplot_dataframe(
 
 def save_resources(df: pd.DataFrame, project_folder: str | Path) -> Path:
     out = validate_resources_dataframe(df)
+    # Preserve optional clearness index columns if already computed
+    for col in ["g0_w_m2", "clearness_index"]:
+        if col in df.columns:
+            out[col] = df[col].values
     path = resources_file_path(project_folder)
     out.to_csv(path, index=False)
     return path
@@ -336,3 +344,103 @@ def load_saved_resources(project_folder: str | Path) -> pd.DataFrame:
 
     df = pd.read_csv(path)
     return validate_resources_dataframe(df)
+
+
+# ============================================================
+# CLEARNESS INDEX (Kt) COMPUTATION
+# ============================================================
+
+def _eot_homer_hours(n: int) -> float:
+    """
+    Equation of time using HOMER's documented formula (Spencer / Duffie-Beckman).
+
+    E = 3.82 * (0.000075 + 0.001868*cosB - 0.032077*sinB
+                          - 0.014615*cos2B - 0.04089*sin2B)
+
+    where B = (360/365)*(n-1) degrees converted to radians.
+    Returns E in hours.
+    """
+    B = math.radians(360.0 / 365.0 * (n - 1))
+    return 3.82 * (
+        0.000075
+        + 0.001868 * math.cos(B)
+        - 0.032077 * math.sin(B)
+        - 0.014615 * math.cos(2 * B)
+        - 0.04089  * math.sin(2 * B)
+    )
+
+
+def _compute_g0_for_timestamp(
+    ts: pd.Timestamp,
+    lat: float,
+    lon: float,
+    timezone_offset_hours: float,
+) -> float:
+    """
+    Compute extraterrestrial horizontal irradiance G0 (W/m²) for one hourly timestep.
+
+    Uses HOMER's documented solar time formula:
+        ts = tc + lon/15 - timezone_offset + E
+
+    Formula (Duffie & Beckman):
+        G0 = Gsc * E0 * max(0, cos(zenith))
+    """
+    n        = ts.timetuple().tm_yday
+    clock_hr = ts.hour + 0.5                              # midpoint of the hour
+    E        = _eot_homer_hours(n)                        # hours
+    solar_hr = clock_hr + lon / 15.0 - timezone_offset_hours + E
+
+    ha_r  = math.radians(15.0 * (solar_hr - 12.0))
+    dec_r = math.radians(23.45 * math.sin(math.radians(360.0 / 365.0 * (n - 81))))
+    lat_r = math.radians(lat)
+
+    cos_zenith = max(0.0,
+        math.sin(lat_r) * math.sin(dec_r)
+        + math.cos(lat_r) * math.cos(dec_r) * math.cos(ha_r)
+    )
+
+    B  = math.radians(360.0 / 365.0 * (n - 1))
+    E0 = 1.0 + 0.033 * math.cos(B)
+
+    return SOLAR_CONSTANT_W_PER_M2 * E0 * cos_zenith
+
+
+def add_clearness_index(
+    df: pd.DataFrame,
+    lat: float,
+    lon: float,
+    timezone_offset_hours: float = 5.5,
+) -> pd.DataFrame:
+    """
+    Add G0 and clearness index (Kt) columns to a resources DataFrame.
+
+    Columns added:
+        g0_w_m2          — extraterrestrial horizontal irradiance (W/m²)
+        clearness_index  — Kt = GHI / G0  (0 when sun is below horizon)
+
+    Parameters
+    ----------
+    df                    : validated resources DataFrame
+    lat                   : site latitude in degrees North
+    lon                   : site longitude in degrees East
+    timezone_offset_hours : hours east of UTC (e.g. India = 5.5)
+
+    Notes
+    -----
+    - Uses HOMER's documented EoT formula for solar time.
+    - Kt is NOT capped here — the cap (kt_max) is applied in the PV model
+      so different projects can use different cap values without re-downloading.
+    - Kt > 1 physically means the NASA data has a spurious high value for that hour.
+    """
+    out = validate_resources_dataframe(df).copy()
+
+    out["g0_w_m2"] = out["timestamp"].apply(
+        lambda t: _compute_g0_for_timestamp(t, lat, lon, timezone_offset_hours)
+    )
+
+    out["clearness_index"] = out.apply(
+        lambda r: r["ghi"] / r["g0_w_m2"] if r["g0_w_m2"] > 10.0 else 0.0,
+        axis=1,
+    )
+
+    return out
