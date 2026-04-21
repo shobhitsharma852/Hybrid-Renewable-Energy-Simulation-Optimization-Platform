@@ -9,7 +9,7 @@ from dashboard.ui.sidebar import render_left_panel
 
 
 st.set_page_config(
-    page_title="Hybrid Renewable Energy Simulation & Optimization Platform",
+    page_title="Hybrid Renewable Energy Optimization Engine",
     page_icon="⚡",
     layout="wide",
 )
@@ -164,7 +164,7 @@ def render_home_page() -> None:
     <div>
         {"<img class='hero-logo' src='data:image/png;base64," + logo_b64 + "' width='280' />" if logo_b64 else "<h2 style='color:#123c7b;'>InSolare Energy Ltd.</h2>"}
         <div class="hero-title">
-            Hybrid Renewable Energy Simulation & Optimization Platform
+            Hybrid Renewable Energy Optimization Engine
         </div>
         <div class="hero-subtitle">
             Design, simulate, and evaluate hybrid renewable energy systems including Solar PV, Wind Turbines, Battery Energy Storage Systems (BESS), Converters, and Grid integration for project-level planning and analysis.

@@ -151,6 +151,8 @@ def write_component_to_ui(state: State, selected_component: str, component_data:
         _set_ui(state, "pv_panel_slope_deg", orientation["panel_slope_deg"] if orientation["panel_slope_deg"] is not None else 0.0, force)
         _set_ui(state, "pv_use_default_azimuth", orientation["use_default_azimuth"], force)
         _set_ui(state, "pv_panel_azimuth_deg", orientation["panel_azimuth_deg"] if orientation["panel_azimuth_deg"] is not None else 0.0, force)
+        _set_ui(state, "pv_use_clearness_index_cap", orientation.get("use_clearness_index_cap", False), force)
+        _set_ui(state, "pv_kt_max", orientation.get("kt_max", 0.82), force)
 
         temperature = pv["temperature"]
         _set_ui(state, "pv_temperature_enabled", temperature["enabled"], force)
@@ -305,6 +307,8 @@ def build_pv_from_state(state: State) -> dict:
             "panel_slope_deg": None if bool(_read_ui(state, "pv_use_default_slope")) else float(_read_ui(state, "pv_panel_slope_deg")),
             "use_default_azimuth": bool(_read_ui(state, "pv_use_default_azimuth")),
             "panel_azimuth_deg": None if bool(_read_ui(state, "pv_use_default_azimuth")) else float(_read_ui(state, "pv_panel_azimuth_deg")),
+            "use_clearness_index_cap": bool(_read_ui(state, "pv_use_clearness_index_cap")),
+            "kt_max": float(_read_ui(state, "pv_kt_max")),
         },
         "temperature": {
             "enabled": bool(_read_ui(state, "pv_temperature_enabled")),

@@ -34,6 +34,7 @@ class Project:
     location: ProjectLocation
     economics: ProjectEconomics
     version: str = "1.0"
+    simulation_time_step_minutes: int = 60
 
 
 def validate_project(project: Project) -> None:
@@ -62,6 +63,9 @@ def validate_project(project: Project) -> None:
     if project.economics.annual_capacity_shortage < 0:
         raise ValueError("Annual capacity shortage must be >= 0")
 
+    if project.simulation_time_step_minutes <= 0:
+        raise ValueError("simulation_time_step_minutes must be > 0")
+
 
 def project_to_dict(project: Project) -> Dict[str, Any]:
     validate_project(project)
@@ -77,6 +81,7 @@ def project_from_dict(data: Dict[str, Any]) -> Project:
         location=location,
         economics=economics,
         version=data.get("version", "1.0"),
+        simulation_time_step_minutes=int(data.get("simulation_time_step_minutes", 60)),
     )
     validate_project(project)
     return project

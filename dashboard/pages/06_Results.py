@@ -19,6 +19,22 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
+st.logo("dashboard/assets/insolare_logo.png", size="large")
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebarHeader"] img {
+        max-width: 100% !important;
+        width: 100% !important;
+        height: auto !important;
+    }
+    [data-testid="stSidebarHeader"] {
+        padding: 0 1rem !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ============================================================

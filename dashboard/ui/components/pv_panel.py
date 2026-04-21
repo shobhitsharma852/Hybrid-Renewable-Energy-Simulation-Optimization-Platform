@@ -203,6 +203,30 @@ def render_pv_component_panel() -> None:
             key="ui_pv_panel_azimuth_deg",
         )
 
+        st.divider()
+        use_clearness_index_cap = st.checkbox(
+            "Use Clearness Index Cap (HOMER-matched GHI processing)",
+            value=st.session_state.get("ui_pv_use_clearness_index_cap", False),
+            key="ui_pv_use_clearness_index_cap",
+            help=(
+                "When ON: effective GHI = min(Kt, kt_max) x G0. "
+                "Requires clearness index columns in the saved resources CSV "
+                "(compute them on the Resources page). "
+                "Reduces PV error vs HOMER from ~1% to ~0.07%."
+            ),
+        )
+
+        kt_max = st.number_input(
+            "Kt Max (clearness index cap)",
+            min_value=0.50,
+            max_value=1.00,
+            value=st.session_state.get("ui_pv_kt_max", 0.82),
+            step=0.01,
+            disabled=not use_clearness_index_cap,
+            key="ui_pv_kt_max",
+            help="Standard Duffie & Beckman clear-sky maximum = 0.82. HOMER uses this value.",
+        )
+
     # ------------------ TEMPERATURE ------------------
 
     with st.expander("Temperature Settings", expanded=False):
@@ -268,6 +292,8 @@ def render_pv_component_panel() -> None:
                 panel_slope_deg=None if use_default_slope else panel_slope_deg,
                 use_default_azimuth=use_default_azimuth,
                 panel_azimuth_deg=None if use_default_azimuth else panel_azimuth_deg,
+                use_clearness_index_cap=use_clearness_index_cap,
+                kt_max=float(kt_max),
             )
 
             temperature = PVTemperatureSettings(
@@ -327,6 +353,8 @@ def build_pv_component_from_state(
     panel_slope_deg: float,
     use_default_azimuth: bool,
     panel_azimuth_deg: float,
+    use_clearness_index_cap: bool,
+    kt_max: float,
     temperature_enabled: bool,
     temperature_coefficient_pct_per_degC: float,
     nominal_operating_cell_temp_c: float,
@@ -354,6 +382,8 @@ def build_pv_component_from_state(
         panel_slope_deg=None if use_default_slope else float(panel_slope_deg),
         use_default_azimuth=use_default_azimuth,
         panel_azimuth_deg=None if use_default_azimuth else float(panel_azimuth_deg),
+        use_clearness_index_cap=use_clearness_index_cap,
+        kt_max=float(kt_max),
     )
 
     temperature = PVTemperatureSettings(

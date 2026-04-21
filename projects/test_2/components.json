@@ -31,7 +31,9 @@
       "use_default_slope": true,
       "panel_slope_deg": null,
       "use_default_azimuth": true,
-      "panel_azimuth_deg": null
+      "panel_azimuth_deg": null,
+      "use_clearness_index_cap": false,
+      "kt_max": 0.82
     },
     "temperature": {
       "enabled": true,
@@ -46,7 +48,7 @@
     "turbine_model_name": "Generic 1.5 MW",
     "rated_capacity_kw": 1500.0,
     "quantity_options": [
-      2
+      1
     ],
     "capital_cost_per_turbine": 3000000.0,
     "replacement_cost_per_turbine": 3000000.0,

@@ -3,7 +3,7 @@
     "enabled": true,
     "use_search_space": true,
     "capacity_kw_options": [
-      3000.0
+      1700.0
     ],
     "capital_cost_per_kw": 2500.0,
     "replacement_cost_per_kw": 2500.0,
@@ -31,7 +31,9 @@
       "use_default_slope": true,
       "panel_slope_deg": null,
       "use_default_azimuth": true,
-      "panel_azimuth_deg": null
+      "panel_azimuth_deg": null,
+      "use_clearness_index_cap": true,
+      "kt_max": 0.82
     },
     "temperature": {
       "enabled": false,

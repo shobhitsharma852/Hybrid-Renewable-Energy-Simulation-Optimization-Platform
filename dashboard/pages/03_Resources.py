@@ -9,7 +9,9 @@ import streamlit as st
 
 from core.project import load_project
 from core.resources import (
+    resample_resources_to_timestep,
     NASA_HOURLY_MIN_YEAR,
+    add_clearness_index,
     add_time_features,
     aggregate_resources,
     fetch_nasa_power_resources,
@@ -41,6 +43,8 @@ if folder is None:
 
 project = load_project(folder)
 st.success(f"Project: {project.meta.name}")
+time_step_minutes = int(project.simulation_time_step_minutes)
+st.info(f"Simulation time resolution: **{time_step_minutes} min** — resource data will be resampled to this resolution when simulation runs.")
 
 if "current_resources_df" not in st.session_state:
     st.session_state.current_resources_df = None
@@ -320,7 +324,7 @@ def _show_comparison_section(active_df: pd.DataFrame):
     )
 
 
-def _show_resources_output(df: pd.DataFrame):
+def _show_resources_output(df: pd.DataFrame, ts_minutes: int = 60):
     summary = summarize_resources(df)
 
     st.divider()
@@ -333,7 +337,7 @@ def _show_resources_output(df: pd.DataFrame):
     a4.metric("Mean Temp (°C)", f"{summary.temperature_mean:.2f}")
     a5.metric("Coverage", f"{summary.start_timestamp.year}–{summary.end_timestamp.year}")
 
-    st.subheader("Raw Preview")
+    st.subheader("Raw Preview (Original Hourly Data)")
     preview_df = df.head(24).rename(
         columns={
             "ghi": "ghi_wh_per_m2",
@@ -342,6 +346,78 @@ def _show_resources_output(df: pd.DataFrame):
         }
     )
     st.dataframe(preview_df, use_container_width=True)
+
+    # ── Resampled preview ──────────────────────────────────────────────────
+    if ts_minutes != 60:
+        st.divider()
+        try:
+            steps_per_day = round(24 * 60 / ts_minutes)
+            rs_df = resample_resources_to_timestep(df, ts_minutes)
+            st.subheader(
+                f"Resampled Preview — {ts_minutes} min resolution  "
+                f"| {len(rs_df):,} rows | Mean GHI: {rs_df['ghi'].mean():.2f} Wh/m² "
+                f"| Mean Wind: {rs_df['ws50m'].mean():.2f} m/s"
+            )
+            st.caption(f"First {steps_per_day} rows = first 24 hours at {ts_minutes}-min resolution")
+            st.dataframe(
+                rs_df.head(steps_per_day).rename(
+                    columns={"ghi": "ghi_wh_per_m2", "ws50m": "ws50m_mps", "temperature": "temperature_c"}
+                ),
+                use_container_width=True,
+            )
+            st.subheader(f"First Day Chart — {ts_minutes} min steps")
+            chart_rs = rs_df.head(steps_per_day).set_index("timestamp")[["ghi", "ws50m", "temperature"]]
+            st.line_chart(chart_rs, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Could not resample for preview: {e}")
+
+    # ── Clearness Index ───────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Clearness Index (HOMER-Matched GHI Processing)")
+    st.caption(
+        "Computes G0 (extraterrestrial irradiance) and Kt = GHI / G0 for each hour "
+        "using HOMER's documented equation of time formula. When saved, the PV model "
+        "can use Kt-capped GHI to match HOMER output within ~0.07%."
+    )
+
+    if "clearness_index" in df.columns and "g0_w_m2" in df.columns:
+        daytime = df[df["g0_w_m2"] > 10]
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Daytime Hours", f"{len(daytime):,}")
+        k2.metric("Mean Kt (daytime)", f"{daytime['clearness_index'].mean():.4f}")
+        k3.metric("Hours Kt > 0.82", f"{(daytime['clearness_index'] > 0.82).sum()}")
+        k4.metric("Max Kt", f"{daytime['clearness_index'].max():.4f}")
+        st.success("Clearness index columns are present. Save to persist them.")
+    else:
+        st.info("Clearness index not yet computed for this resource data.")
+
+    tz_offset = st.number_input(
+        "Timezone Offset (hours east of UTC)",
+        min_value=-12.0,
+        max_value=14.0,
+        value=5.5,
+        step=0.5,
+        help="India / IST = 5.5  |  UTC = 0.0  |  China = 8.0",
+        key="ui_resources_tz_offset",
+    )
+
+    if st.button("Compute Clearness Index", use_container_width=True):
+        try:
+            with st.spinner("Computing G0 and Kt for each hour using HOMER EoT formula..."):
+                df_with_kt = add_clearness_index(
+                    df,
+                    lat=project.location.lat,
+                    lon=project.location.lon,
+                    timezone_offset_hours=float(tz_offset),
+                )
+            st.session_state.current_resources_df = df_with_kt
+            st.success(
+                f"Clearness index computed for {len(df_with_kt):,} rows. "
+                "Click 'Save Resources to Project' below to persist."
+            )
+            st.rerun()
+        except Exception as e:
+            st.error(f"Failed to compute clearness index: {e}")
 
     st.divider()
     st.subheader("Long-Term Analysis")
@@ -626,6 +702,6 @@ if st.button("Download from NASA POWER", type="primary"):
 active_df = _get_active_df()
 
 if active_df is not None:
-    _show_resources_output(active_df)
+    _show_resources_output(active_df, ts_minutes=time_step_minutes)
 else:
     st.info("No downloaded or saved resource data found yet for this project.")

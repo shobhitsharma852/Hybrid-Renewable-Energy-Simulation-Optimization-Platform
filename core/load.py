@@ -74,15 +74,88 @@ def standardize_load_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def validate_hourly_load(df: pd.DataFrame, expect_rows: int = 8760) -> pd.DataFrame:
-    if len(df) != expect_rows:
-        raise ValueError(f"Expected {expect_rows} hourly rows, got {len(df)}")
+def infer_time_step_hours(df: pd.DataFrame) -> float:
+    """Detect the uniform timestep in hours from a load or resource dataframe."""
+    diffs = df["timestamp"].diff().dropna()
+    if diffs.empty:
+        return 1.0
+    unique = diffs.unique()
+    if len(unique) != 1:
+        raise ValueError(
+            f"Timestamps are not evenly spaced — found multiple intervals: {unique}"
+        )
+    return unique[0].total_seconds() / 3600.0
+
+
+def validate_hourly_load(
+    df: pd.DataFrame,
+    expect_rows: int | None = None,
+    time_step_hours: float | None = None,
+) -> pd.DataFrame:
+    """
+    Validate a load dataframe at any timestep resolution.
+
+    Parameters
+    ----------
+    expect_rows:
+        If given, check exact row count. Pass None to skip (default).
+    time_step_hours:
+        If given, validate that detected interval matches. Pass None to accept any.
+    """
+    if expect_rows is not None and len(df) != expect_rows:
+        raise ValueError(f"Expected {expect_rows} rows, got {len(df)}")
 
     diffs = df["timestamp"].diff().dropna()
-    if not (diffs == pd.Timedelta(hours=1)).all():
-        raise ValueError("Load timestamps must be strictly hourly (1-hour interval)")
+    if diffs.empty:
+        return df
+
+    unique = diffs.unique()
+    if len(unique) != 1:
+        raise ValueError(
+            f"Load timestamps are not evenly spaced — found multiple intervals: {unique}"
+        )
+
+    if time_step_hours is not None:
+        detected = unique[0].total_seconds() / 3600.0
+        if abs(detected - float(time_step_hours)) > 1e-6:
+            raise ValueError(
+                f"Expected {time_step_hours}h interval, detected {detected}h in load data"
+            )
 
     return df
+
+
+def resample_load_to_timestep(
+    df: pd.DataFrame,
+    time_step_minutes: int,
+) -> pd.DataFrame:
+    """
+    Resample a load dataframe to any sub-hourly or custom timestep.
+
+    Uses linear interpolation so the load profile is smooth and annual
+    energy is preserved.
+
+    Parameters
+    ----------
+    df:
+        Load dataframe with 'timestamp' and 'load_kw' columns.
+    time_step_minutes:
+        Target resolution in minutes (e.g. 1, 5, 10, 15, 20, 30, 60).
+    """
+    if time_step_minutes <= 0:
+        raise ValueError("time_step_minutes must be > 0")
+
+    df = df.set_index("timestamp").sort_index()
+    new_index = pd.date_range(
+        start=df.index[0],
+        end=df.index[-1],
+        freq=f"{time_step_minutes}min",
+    )
+    resampled = df.reindex(df.index.union(new_index))
+    resampled = resampled.interpolate(method="time")
+    resampled = resampled.reindex(new_index).clip(lower=0.0)
+    resampled = resampled.reset_index().rename(columns={"index": "timestamp"})
+    return resampled[["timestamp", "load_kw"]].reset_index(drop=True)
 
 
 def summarize_load(df: pd.DataFrame) -> LoadSummary:
@@ -126,7 +199,7 @@ def read_uploaded_load(uploaded_file: BinaryIO, filename: str) -> pd.DataFrame:
         raise ValueError("Unsupported file type. Use CSV or Excel.")
 
     out = standardize_load_dataframe(raw)
-    out = validate_hourly_load(out)
+    out = validate_hourly_load(out)  # accepts any consistent interval
     return out
 
 

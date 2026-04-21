@@ -7,8 +7,10 @@ from pathlib import Path
 import pandas as pd
 
 from core.components.config import load_components
-from core.load import load_saved_load
+from core.load import load_saved_load, resample_load_to_timestep
 from core.optimization.design_point import DesignPoint
+from core.project import load_project
+from core.resources import resample_resources_to_timestep
 from core.simulation import HybridSystemSimulator, SimulationInputs
 
 
@@ -78,6 +80,10 @@ def load_project_simulation_inputs(
     project_dir = _get_project_dir(project_name)
     inputs_dir = project_dir / "inputs"
 
+    project = load_project(project_dir)
+    time_step_minutes = int(project.simulation_time_step_minutes)
+    time_step_hours = time_step_minutes / 60.0
+
     components = load_components(project_dir)
     load_df = load_saved_load(project_dir)
 
@@ -86,6 +92,12 @@ def load_project_simulation_inputs(
         raise FileNotFoundError(f"resources.csv not found at: {resource_path}")
 
     resource_df = pd.read_csv(resource_path)
+    resource_df["timestamp"] = pd.to_datetime(resource_df["timestamp"])
+
+    # Resample both datasets to the project's chosen time resolution
+    if time_step_minutes != 60:
+        load_df = resample_load_to_timestep(load_df, time_step_minutes)
+        resource_df = resample_resources_to_timestep(resource_df, time_step_minutes)
 
     selected_design = design if design is not None else _build_default_design_point(components)
 
@@ -94,6 +106,7 @@ def load_project_simulation_inputs(
         resource_df=resource_df,
         components=components,
         design=selected_design,
+        time_step_hours=time_step_hours,
     )
 
 

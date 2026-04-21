@@ -12,7 +12,23 @@ def _exists(p: Path | None, rel: str) -> bool:
 
 
 def render_left_panel():
-    
+    st.logo("dashboard/assets/insolare_logo.png", size="large")
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebarHeader"] img {
+            max-width: 100% !important;
+            width: 100% !important;
+            height: auto !important;
+        }
+        [data-testid="stSidebarHeader"] {
+            padding: 0 1rem !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.sidebar.markdown("### REQUIRED CHANGES")
 
     p = active_project_folder()

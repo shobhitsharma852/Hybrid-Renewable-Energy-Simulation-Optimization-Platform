@@ -62,6 +62,20 @@ with c2:
     st.map(df_map, zoom=5)
 
 st.markdown("---")
+st.subheader("Simulation Settings")
+
+default_ts = int(loaded.simulation_time_step_minutes) if loaded else 60
+
+time_step_minutes = st.number_input(
+    "Simulation time resolution (minutes)",
+    min_value=1,
+    max_value=60,
+    value=default_ts,
+    step=1,
+    help="Any value from 1 to 60. Load and resource data will be resampled to this resolution automatically.",
+)
+
+st.markdown("---")
 
 if st.button("Save Project", type="primary"):
     if not name.strip():
@@ -77,6 +91,7 @@ if st.button("Save Project", type="primary"):
                 project_lifetime_years=int(life),
                 annual_capacity_shortage=float(shortage),
             ),
+            simulation_time_step_minutes=int(time_step_minutes),
         )
         path = save_project(proj, folder)
         st.success(f"Saved: {path}")

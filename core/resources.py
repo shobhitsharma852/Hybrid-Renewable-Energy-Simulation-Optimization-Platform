@@ -66,8 +66,10 @@ def validate_resources_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("Duplicate timestamps found in resources data")
 
     diffs = out["timestamp"].diff().dropna()
-    if not diffs.empty and not (diffs == pd.Timedelta(hours=1)).all():
-        raise ValueError("Resources timestamps must be strictly hourly")
+    if not diffs.empty:
+        unique = diffs.unique()
+        if len(unique) != 1:
+            raise ValueError("Resources timestamps are not evenly spaced")
 
     return out
 
@@ -82,6 +84,47 @@ def summarize_resources(df: pd.DataFrame) -> ResourceSummary:
         start_timestamp=pd.Timestamp(out["timestamp"].min()),
         end_timestamp=pd.Timestamp(out["timestamp"].max()),
     )
+
+
+def resample_resources_to_timestep(
+    df: pd.DataFrame,
+    time_step_minutes: int,
+) -> pd.DataFrame:
+    """
+    Resample a resource dataframe (hourly or any resolution) to the target timestep.
+
+    Uses linear interpolation for all columns (GHI, wind speed, temperature).
+    GHI is clipped to >= 0 after interpolation.
+    Clearness index columns (g0_w_m2, clearness_index) are re-interpolated
+    the same way if present.
+
+    Parameters
+    ----------
+    df:
+        Resource dataframe with at least timestamp, ghi, ws50m, temperature columns.
+    time_step_minutes:
+        Target resolution in minutes (e.g. 1, 5, 10, 15, 20, 30, 60).
+    """
+    if time_step_minutes <= 0:
+        raise ValueError("time_step_minutes must be > 0")
+
+    df = df.set_index("timestamp").sort_index()
+    new_index = pd.date_range(
+        start=df.index[0],
+        end=df.index[-1],
+        freq=f"{time_step_minutes}min",
+    )
+    resampled = df.reindex(df.index.union(new_index))
+    resampled = resampled.interpolate(method="time")
+    resampled = resampled.reindex(new_index)
+
+    if "ghi" in resampled.columns:
+        resampled["ghi"] = resampled["ghi"].clip(lower=0.0)
+    if "ws50m" in resampled.columns:
+        resampled["ws50m"] = resampled["ws50m"].clip(lower=0.0)
+
+    resampled = resampled.reset_index().rename(columns={"index": "timestamp"})
+    return resampled.reset_index(drop=True)
 
 
 def filter_resources_by_year(df: pd.DataFrame, start_year: int, end_year: int) -> pd.DataFrame:
@@ -377,32 +420,68 @@ def _compute_g0_for_timestamp(
     timezone_offset_hours: float,
 ) -> float:
     """
-    Compute extraterrestrial horizontal irradiance G0 (W/m²) for one hourly timestep.
+    Compute extraterrestrial horizontal irradiance G0 (W/m²) averaged over one hourly timestep.
 
-    Uses HOMER's documented solar time formula:
-        ts = tc + lon/15 - timezone_offset + E
+    Uses HOMER's documented solar-time equation and the Duffie & Beckman /
+    HOMER time-step average form for extraterrestrial horizontal radiation.
 
-    Formula (Duffie & Beckman):
-        G0 = Gsc * E0 * max(0, cos(zenith))
+    Why this matters:
+    - A midpoint-only approximation is close, but it is not the same as HOMER.
+    - HOMER integrates extraterrestrial horizontal radiation over the whole time step
+      using the hour angle at the beginning and end of the step.
+    - This produces noticeably closer HOMER parity for capped-Kt workflows.
     """
-    n        = ts.timetuple().tm_yday
-    clock_hr = ts.hour + 0.5                              # midpoint of the hour
-    E        = _eot_homer_hours(n)                        # hours
-    solar_hr = clock_hr + lon / 15.0 - timezone_offset_hours + E
+    n = ts.timetuple().tm_yday
+    E = _eot_homer_hours(n)
 
-    ha_r  = math.radians(15.0 * (solar_hr - 12.0))
-    dec_r = math.radians(23.45 * math.sin(math.radians(360.0 / 365.0 * (n - 81))))
     lat_r = math.radians(lat)
+    dec_r = math.radians(23.45 * math.sin(math.radians(360.0 / 365.0 * (n - 81))))
 
-    cos_zenith = max(0.0,
-        math.sin(lat_r) * math.sin(dec_r)
-        + math.cos(lat_r) * math.cos(dec_r) * math.cos(ha_r)
+    B = math.radians(360.0 / 365.0 * (n - 1))
+    e0 = 1.0 + 0.033 * math.cos(B)
+    g_on = SOLAR_CONSTANT_W_PER_M2 * e0
+
+    # HOMER works in civil time and converts to solar time. For an hourly step,
+    # compute the hour angle at the beginning and end of the hour, then integrate.
+    civil_hour_start = float(ts.hour)
+    civil_hour_end = civil_hour_start + 1.0
+
+    solar_hour_start = civil_hour_start + lon / 15.0 - timezone_offset_hours + E
+    solar_hour_end = civil_hour_end + lon / 15.0 - timezone_offset_hours + E
+
+    hour_angle_start_deg = 15.0 * (solar_hour_start - 12.0)
+    hour_angle_end_deg = 15.0 * (solar_hour_end - 12.0)
+
+    # Clip the hour-angle interval to the daylight interval so night-time and
+    # sunrise/sunset partial hours are handled correctly.
+    cos_ws = -math.tan(lat_r) * math.tan(dec_r)
+
+    if cos_ws >= 1.0:
+        return 0.0
+
+    if cos_ws <= -1.0:
+        sunset_hour_angle_r = math.pi
+    else:
+        sunset_hour_angle_r = math.acos(cos_ws)
+
+    daylight_start_deg = -math.degrees(sunset_hour_angle_r)
+    daylight_end_deg = math.degrees(sunset_hour_angle_r)
+
+    clipped_start_deg = max(daylight_start_deg, min(daylight_end_deg, hour_angle_start_deg))
+    clipped_end_deg = max(daylight_start_deg, min(daylight_end_deg, hour_angle_end_deg))
+
+    if clipped_end_deg <= clipped_start_deg:
+        return 0.0
+
+    w1 = math.radians(clipped_start_deg)
+    w2 = math.radians(clipped_end_deg)
+
+    g0_avg = (12.0 / math.pi) * g_on * (
+        math.cos(lat_r) * math.cos(dec_r) * (math.sin(w2) - math.sin(w1))
+        + (w2 - w1) * math.sin(lat_r) * math.sin(dec_r)
     )
 
-    B  = math.radians(360.0 / 365.0 * (n - 1))
-    E0 = 1.0 + 0.033 * math.cos(B)
-
-    return SOLAR_CONSTANT_W_PER_M2 * E0 * cos_zenith
+    return max(0.0, g0_avg)
 
 
 def add_clearness_index(

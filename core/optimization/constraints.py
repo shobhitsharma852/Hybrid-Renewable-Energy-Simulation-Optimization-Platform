@@ -138,6 +138,7 @@ def _evaluate_operating_reserve(
     components: ComponentsConfig,
     design: DesignPoint,
     simulation_results,
+    time_step_hours: float = 1.0,
 ) -> tuple[bool, float, float, int]:
     if not constraints.enforce_operating_reserve:
         return True, 0.0, 0.0, 0
@@ -167,7 +168,7 @@ def _evaluate_operating_reserve(
             battery_config=components.battery,
             converter_config=components.converter,
             design=design,
-            time_step_hours=1.0,
+            time_step_hours=time_step_hours,
         )
 
         available_reserve_kw = grid_headroom_kw + battery_headroom_kw
@@ -197,6 +198,7 @@ def evaluate_candidate_constraints(
     components: ComponentsConfig,
     design: DesignPoint,
     simulation_results,
+    time_step_hours: float = 1.0,
 ) -> ConstraintEvaluation:
     summary = simulation_results.summary
 
@@ -229,6 +231,7 @@ def evaluate_candidate_constraints(
         components=components,
         design=design,
         simulation_results=simulation_results,
+        time_step_hours=time_step_hours,
     )
 
     failure_reasons: list[str] = []

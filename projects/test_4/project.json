@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "name": "Test 4",
+    "author": "Shobhit",
+    "description": "Homer Validation"
+  },
+  "location": {
+    "lat": 25.2812,
+    "lon": 71.0524,
+    "timezone": "Asia/Kolkata"
+  },
+  "economics": {
+    "discount_rate": 8.0,
+    "inflation_rate": 2.0,
+    "project_lifetime_years": 25,
+    "annual_capacity_shortage": 0.0
+  },
+  "version": "1.0",
+  "simulation_time_step_minutes": 5
+}

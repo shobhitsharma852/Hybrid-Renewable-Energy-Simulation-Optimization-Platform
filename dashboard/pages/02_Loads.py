@@ -6,6 +6,7 @@ from core.load import (
     read_uploaded_load,
     create_constant_load,
     create_daily_profile_load,
+    resample_load_to_timestep,
     save_load,
     summarize_load,
     load_file_path,
@@ -27,6 +28,8 @@ if folder is None:
 
 project = load_project(folder)
 st.success(f"Project: {project.meta.name}")
+time_step_minutes = int(project.simulation_time_step_minutes)
+st.info(f"Simulation time resolution: **{time_step_minutes} min** — load data will be resampled to this resolution when simulation runs.")
 
 st.divider()
 st.subheader("Select Load Input Method")
@@ -47,35 +50,59 @@ if "current_load_df" not in st.session_state:
 load_df = None
 
 
-def _show_load_output(df: pd.DataFrame):
+def _show_load_output(df: pd.DataFrame, ts_minutes: int = 60):
     summary = summarize_load(df)
+    time_step_hours = ts_minutes / 60.0
+    steps_per_day = round(24 * 60 / ts_minutes)
 
     st.divider()
-    st.subheader("Load Summary")
+    st.subheader("Load Summary (Original Data)")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Rows", f"{summary.rows}")
+    c1.metric("Rows", f"{summary.rows:,}")
     c2.metric("Peak Load (kW)", f"{summary.peak_kw:.2f}")
     c3.metric("Average Load (kW)", f"{summary.average_kw:.2f}")
     c4.metric("Annual Energy (kWh)", f"{summary.annual_energy_kwh:,.0f}")
 
-    st.subheader("Preview")
+    st.subheader("Original Data Preview (first 24 rows)")
     st.dataframe(df.head(24), use_container_width=True)
 
-    st.subheader("Daily Load Charts (First 24 Hours)")
-    first_day = df.head(24).copy()
-    first_day["hour"] = range(24)
-    chart_df = first_day.set_index("hour")[["load_kw"]]
+    # ── Resampled preview ──────────────────────────────────────────────────
+    if ts_minutes != 60:
+        st.divider()
+        st.subheader(f"Resampled Preview — {ts_minutes} min resolution")
+        try:
+            resampled_df = resample_load_to_timestep(df, ts_minutes)
+            rs_summary = summarize_load(resampled_df)
+            annual_kwh_corrected = float(resampled_df["load_kw"].sum()) * time_step_hours
 
-    col1, col2 = st.columns(2)
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Resampled Rows", f"{rs_summary.rows:,}")
+            r2.metric("Peak Load (kW)", f"{rs_summary.peak_kw:.2f}")
+            r3.metric("Average Load (kW)", f"{rs_summary.average_kw:.2f}")
+            r4.metric("Annual Energy (kWh)", f"{annual_kwh_corrected:,.0f}")
 
-    with col1:
-        st.caption("Line Chart")
-        st.line_chart(chart_df, use_container_width=True)
+            st.caption(f"First {steps_per_day} rows = first 24 hours at {ts_minutes}-min resolution")
+            st.dataframe(resampled_df.head(steps_per_day), use_container_width=True)
 
-    with col2:
-        st.caption("Bar Chart")
-        st.bar_chart(chart_df, use_container_width=True)
+            st.subheader(f"First Day Chart — {ts_minutes} min steps")
+            first_day = resampled_df.head(steps_per_day).copy().reset_index(drop=True)
+            st.line_chart(first_day.set_index("timestamp")[["load_kw"]], use_container_width=True)
+        except Exception as e:
+            st.warning(f"Could not resample for preview: {e}")
+    else:
+        st.subheader("Daily Load Charts (First 24 Hours)")
+        first_day = df.head(24).copy()
+        first_day["hour"] = range(24)
+        chart_df = first_day.set_index("hour")[["load_kw"]]
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.caption("Line Chart")
+            st.line_chart(chart_df, use_container_width=True)
+        with col2:
+            st.caption("Bar Chart")
+            st.bar_chart(chart_df, use_container_width=True)
 
     if st.button("Save Load to Project", type="primary"):
         try:
@@ -158,7 +185,7 @@ elif method == "24 Hour Profile":
 
 # Use persisted dataframe if present
 if st.session_state.current_load_df is not None:
-    _show_load_output(st.session_state.current_load_df)
+    _show_load_output(st.session_state.current_load_df, ts_minutes=time_step_minutes)
 
 # Show already saved load if no current generated load exists
 saved_path = load_file_path(folder)
@@ -168,6 +195,6 @@ if st.session_state.current_load_df is None and saved_path.exists():
     try:
         saved_df = pd.read_csv(saved_path)
         saved_df["timestamp"] = pd.to_datetime(saved_df["timestamp"], errors="coerce")
-        _show_load_output(saved_df)
+        _show_load_output(saved_df, ts_minutes=time_step_minutes)
     except Exception as e:
         st.error(f"Could not read saved load file: {e}")

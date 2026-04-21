@@ -29,6 +29,7 @@ class SimulationInputs:
     resource_df: pd.DataFrame
     components: ComponentsConfig
     design: DesignPoint
+    time_step_hours: float = 1.0
 
 
 class HybridSystemSimulator:
@@ -69,7 +70,7 @@ class HybridSystemSimulator:
                 grid_config=components.grid,
                 selected_battery_quantity=design.battery_quantity,
                 selected_converter_capacity_kw=design.converter_capacity_kw,
-                time_step_hours=1.0,
+                time_step_hours=self.inputs.time_step_hours,
             )
 
             current_battery_soc_pct = dispatch.battery_soc_pct
@@ -228,21 +229,22 @@ class HybridSystemSimulator:
         total_renewable_from_battery_to_load_kwh: float,
     ) -> SimulationSummary:
         summary = SimulationSummary()
+        dt = self.inputs.time_step_hours
 
         for r in hourly_records:
-            summary.total_load_kwh += r.load_kw
-            summary.total_served_load_kwh += r.served_load_kw
-            summary.total_unmet_load_kwh += r.unmet_load_kw
-            summary.total_excess_energy_kwh += r.excess_energy_kw
-            summary.total_pv_generation_kwh += r.pv_kw
-            summary.total_wind_generation_kwh += r.wind_kw
-            summary.total_grid_import_kwh += r.grid_import_kw
-            summary.total_grid_export_kwh += r.grid_export_kw
-            summary.total_battery_charge_kwh += r.battery_charge_kw
-            summary.total_battery_discharge_kwh += r.battery_discharge_kw
-            summary.total_battery_discharge_dc_kwh += r.battery_discharge_dc_kw
-            summary.total_inverter_loss_kwh += r.inverter_loss_kw
-            summary.total_rectifier_loss_kwh += r.rectifier_loss_kw
+            summary.total_load_kwh += r.load_kw * dt
+            summary.total_served_load_kwh += r.served_load_kw * dt
+            summary.total_unmet_load_kwh += r.unmet_load_kw * dt
+            summary.total_excess_energy_kwh += r.excess_energy_kw * dt
+            summary.total_pv_generation_kwh += r.pv_kw * dt
+            summary.total_wind_generation_kwh += r.wind_kw * dt
+            summary.total_grid_import_kwh += r.grid_import_kw * dt
+            summary.total_grid_export_kwh += r.grid_export_kw * dt
+            summary.total_battery_charge_kwh += r.battery_charge_kw * dt
+            summary.total_battery_discharge_kwh += r.battery_discharge_kw * dt
+            summary.total_battery_discharge_dc_kwh += r.battery_discharge_dc_kw * dt
+            summary.total_inverter_loss_kwh += r.inverter_loss_kw * dt
+            summary.total_rectifier_loss_kwh += r.rectifier_loss_kw * dt
 
         gross_renewable_generation_kwh = (
             summary.total_pv_generation_kwh + summary.total_wind_generation_kwh
@@ -255,6 +257,7 @@ class HybridSystemSimulator:
             )
         else:
             gross_renewable_fraction = 0.0
+            
 
         renewable_served_to_load_kwh = (
             total_direct_renewable_to_load_kwh
