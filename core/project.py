@@ -29,10 +29,16 @@ class ProjectEconomics:
 
 
 @dataclass(frozen=True)
+class ProjectLoadSettings:
+    scaled_annual_energy_kwh: float | None = None
+
+
+@dataclass(frozen=True)
 class Project:
     meta: ProjectMeta
     location: ProjectLocation
     economics: ProjectEconomics
+    load: ProjectLoadSettings = ProjectLoadSettings()
     version: str = "1.0"
     simulation_time_step_minutes: int = 60
 
@@ -63,6 +69,12 @@ def validate_project(project: Project) -> None:
     if project.economics.annual_capacity_shortage < 0:
         raise ValueError("Annual capacity shortage must be >= 0")
 
+    if (
+        project.load.scaled_annual_energy_kwh is not None
+        and project.load.scaled_annual_energy_kwh <= 0
+    ):
+        raise ValueError("scaled_annual_energy_kwh must be > 0 when provided")
+
     if project.simulation_time_step_minutes <= 0:
         raise ValueError("simulation_time_step_minutes must be > 0")
 
@@ -76,10 +88,12 @@ def project_from_dict(data: Dict[str, Any]) -> Project:
     meta = ProjectMeta(**data["meta"])
     location = ProjectLocation(**data["location"])
     economics = ProjectEconomics(**data["economics"])
+    load = ProjectLoadSettings(**data.get("load", {}))
     project = Project(
         meta=meta,
         location=location,
         economics=economics,
+        load=load,
         version=data.get("version", "1.0"),
         simulation_time_step_minutes=int(data.get("simulation_time_step_minutes", 60)),
     )

@@ -4,6 +4,7 @@ import pytest
 
 from core.project import (
     Project,
+    ProjectLoadSettings,
     ProjectMeta,
     ProjectLocation,
     ProjectEconomics,
@@ -22,6 +23,7 @@ def test_save_load_roundtrip():
             project_lifetime_years=25,
             annual_capacity_shortage=0.0,
         ),
+        load=ProjectLoadSettings(scaled_annual_energy_kwh=500000.0),
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -36,6 +38,7 @@ def test_save_load_roundtrip():
     assert abs(p2.location.lon - 71.0524) < 1e-9
     assert p2.economics.discount_rate == 8.0
     assert p2.economics.project_lifetime_years == 25
+    assert p2.load.scaled_annual_energy_kwh == 500000.0
 
 
 def test_invalid_lat_raises():
@@ -91,6 +94,19 @@ def test_empty_timezone_raises():
         meta=ProjectMeta(name="BadTZ"),
         location=ProjectLocation(lat=25.0, lon=71.0, timezone=""),
         economics=ProjectEconomics(),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(ValueError):
+            save_project(p, Path(tmp) / "x")
+
+
+def test_non_positive_scaled_annual_energy_raises():
+    p = Project(
+        meta=ProjectMeta(name="BadLoadScale"),
+        location=ProjectLocation(lat=25.0, lon=71.0, timezone="Asia/Kolkata"),
+        economics=ProjectEconomics(),
+        load=ProjectLoadSettings(scaled_annual_energy_kwh=0.0),
     )
 
     with tempfile.TemporaryDirectory() as tmp:

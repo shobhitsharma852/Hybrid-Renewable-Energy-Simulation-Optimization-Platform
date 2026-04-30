@@ -74,10 +74,11 @@ class HybridSystemSimulator:
             )
 
             current_battery_soc_pct = dispatch.battery_soc_pct
+            dt = self.inputs.time_step_hours
 
             direct_renewable_to_load_kwh = (
                 dispatch.wind_to_load_kw + dispatch.pv_to_load_ac_kw
-            )
+            ) * dt
             total_direct_renewable_to_load_kwh += direct_renewable_to_load_kwh
 
             renewable_energy_in_battery_kwh += dispatch.renewable_charge_stored_kwh
@@ -93,7 +94,7 @@ class HybridSystemSimulator:
                 )
 
                 renewable_battery_discharge_kwh = (
-                    dispatch.battery_discharge_kw * renewable_share_in_removed_energy
+                    dispatch.battery_discharge_kw * dt * renewable_share_in_removed_energy
                 )
 
                 renewable_energy_in_battery_kwh -= (
@@ -110,6 +111,7 @@ class HybridSystemSimulator:
             hourly_records.append(
                 HourlySimulationRecord(
                     hour_index=hour_index,
+                    timestamp=self._get_step_timestamp(load_df, resource_df, hour_index),
                     load_kw=load_kw,
                     pv_kw=pv_kw,
                     wind_kw=wind_kw,
@@ -138,6 +140,18 @@ class HybridSystemSimulator:
             hourly_records=hourly_records,
             summary=summary,
         )
+
+    def _get_step_timestamp(
+        self,
+        load_df: pd.DataFrame,
+        resource_df: pd.DataFrame,
+        hour_index: int,
+    ) -> pd.Timestamp | None:
+        if "timestamp" in load_df.columns:
+            return pd.Timestamp(load_df.iloc[hour_index]["timestamp"])
+        if "timestamp" in resource_df.columns:
+            return pd.Timestamp(resource_df.iloc[hour_index]["timestamp"])
+        return None
 
     def _get_load_kw(self, load_df: pd.DataFrame, hour_index: int) -> float:
         if "load_kw" in load_df.columns:

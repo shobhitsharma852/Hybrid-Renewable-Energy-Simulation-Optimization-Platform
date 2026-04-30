@@ -7,6 +7,7 @@ import pandas as pd
 @dataclass
 class HourlySimulationRecord:
     hour_index: int
+    timestamp: pd.Timestamp | None
     load_kw: float
     pv_kw: float
     wind_kw: float

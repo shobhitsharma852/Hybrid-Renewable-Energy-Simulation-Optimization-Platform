@@ -100,6 +100,9 @@ def _safe_metric(summary: dict | None, key: str, default: float = 0.0) -> float:
 def _prepare_chart_df(hourly_df: pd.DataFrame) -> pd.DataFrame:
     df = hourly_df.copy()
 
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+
     if "hour_index" in df.columns:
         df["hour_index"] = pd.to_numeric(df["hour_index"], errors="coerce")
 
@@ -122,6 +125,16 @@ def _prepare_chart_df(hourly_df: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     return df
+
+
+def _chart_frame(hourly_df: pd.DataFrame, value_columns: list[str]) -> pd.DataFrame | None:
+    index_column = "timestamp" if "timestamp" in hourly_df.columns else "hour_index"
+    cols = [c for c in [index_column, *value_columns] if c in hourly_df.columns]
+
+    if len(cols) < 2 or index_column not in cols:
+        return None
+
+    return hourly_df[cols].set_index(index_column)
 
 
 def _get_default_project_index(projects: list[str]) -> int:
@@ -312,41 +325,36 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
 )
 
 with tab1:
-    cols = [c for c in ["hour_index", "load_kw", "served_load_kw"] if c in hourly_df.columns]
-    if len(cols) >= 2:
-        chart_df = hourly_df[cols].set_index("hour_index") if "hour_index" in cols else hourly_df[cols]
+    chart_df = _chart_frame(hourly_df, ["load_kw", "served_load_kw"])
+    if chart_df is not None:
         st.line_chart(chart_df)
     else:
         st.warning("Required columns for load chart not found.")
 
 with tab2:
-    cols = [c for c in ["hour_index", "pv_kw", "wind_kw"] if c in hourly_df.columns]
-    if len(cols) >= 2:
-        chart_df = hourly_df[cols].set_index("hour_index") if "hour_index" in cols else hourly_df[cols]
+    chart_df = _chart_frame(hourly_df, ["pv_kw", "wind_kw"])
+    if chart_df is not None:
         st.line_chart(chart_df)
     else:
         st.warning("Required columns for PV/Wind chart not found.")
 
 with tab3:
-    cols = [c for c in ["hour_index", "battery_soc_pct", "battery_charge_kw", "battery_discharge_kw"] if c in hourly_df.columns]
-    if len(cols) >= 2:
-        chart_df = hourly_df[cols].set_index("hour_index") if "hour_index" in cols else hourly_df[cols]
+    chart_df = _chart_frame(hourly_df, ["battery_soc_pct", "battery_charge_kw", "battery_discharge_kw"])
+    if chart_df is not None:
         st.line_chart(chart_df)
     else:
         st.warning("Required columns for battery chart not found.")
 
 with tab4:
-    cols = [c for c in ["hour_index", "grid_import_kw", "grid_export_kw"] if c in hourly_df.columns]
-    if len(cols) >= 2:
-        chart_df = hourly_df[cols].set_index("hour_index") if "hour_index" in cols else hourly_df[cols]
+    chart_df = _chart_frame(hourly_df, ["grid_import_kw", "grid_export_kw"])
+    if chart_df is not None:
         st.line_chart(chart_df)
     else:
         st.warning("Required columns for grid chart not found.")
 
 with tab5:
-    cols = [c for c in ["hour_index", "unmet_load_kw", "excess_energy_kw"] if c in hourly_df.columns]
-    if len(cols) >= 2:
-        chart_df = hourly_df[cols].set_index("hour_index") if "hour_index" in cols else hourly_df[cols]
+    chart_df = _chart_frame(hourly_df, ["unmet_load_kw", "excess_energy_kw"])
+    if chart_df is not None:
         st.line_chart(chart_df)
     else:
         st.warning("Required columns for unmet/excess chart not found.")

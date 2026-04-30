@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.components.config import load_components
-from core.load import load_saved_load, resample_load_to_timestep
+from core.load import load_saved_load, resample_load_to_timestep, scale_load_to_annual_energy
 from core.optimization.design_point import DesignPoint
 from core.project import load_project
 from core.resources import resample_resources_to_timestep
@@ -64,6 +64,40 @@ def _build_default_design_point(components) -> DesignPoint:
     )
 
 
+def _validate_matching_timestamps(
+    load_df: pd.DataFrame,
+    resource_df: pd.DataFrame,
+) -> None:
+    if "timestamp" not in load_df.columns or "timestamp" not in resource_df.columns:
+        return
+
+    if len(load_df) != len(resource_df):
+        raise ValueError(
+            "Load and resource data must have the same number of timesteps after resampling"
+        )
+
+    load_timestamps = pd.to_datetime(load_df["timestamp"]).reset_index(drop=True)
+    resource_timestamps = pd.to_datetime(resource_df["timestamp"]).reset_index(drop=True)
+
+    load_diffs = load_timestamps.diff().dropna()
+    resource_diffs = resource_timestamps.diff().dropna()
+
+    if not load_diffs.equals(resource_diffs):
+        raise ValueError(
+            "Load and resource timestep spacing does not match after resampling; "
+            "simulation requires aligned timesteps"
+        )
+
+    load_structure = load_timestamps.dt.strftime("%m-%d %H:%M:%S")
+    resource_structure = resource_timestamps.dt.strftime("%m-%d %H:%M:%S")
+
+    if not load_structure.equals(resource_structure):
+        raise ValueError(
+            "Load and resource timestamps are not structurally aligned after resampling; "
+            "simulation requires the same timestep sequence"
+        )
+
+
 def load_project_simulation_inputs(
     project_name: str,
     design: DesignPoint | None = None,
@@ -98,6 +132,14 @@ def load_project_simulation_inputs(
     if time_step_minutes != 60:
         load_df = resample_load_to_timestep(load_df, time_step_minutes)
         resource_df = resample_resources_to_timestep(resource_df, time_step_minutes)
+
+    if project.load.scaled_annual_energy_kwh is not None:
+        load_df = scale_load_to_annual_energy(
+            load_df,
+            target_annual_energy_kwh=float(project.load.scaled_annual_energy_kwh),
+        )
+
+    _validate_matching_timestamps(load_df, resource_df)
 
     selected_design = design if design is not None else _build_default_design_point(components)
 

@@ -1,8 +1,8 @@
 {
   "meta": {
-    "name": "Test 4",
-    "author": "Shobhit",
-    "description": "Homer Validation"
+    "name": "test 5",
+    "author": "SS",
+    "description": "made the timestamp equal with the timstamp in the simulation"
   },
   "location": {
     "lat": 25.2812,
@@ -14,6 +14,9 @@
     "inflation_rate": 2.0,
     "project_lifetime_years": 25,
     "annual_capacity_shortage": 0.0
+  },
+  "load": {
+    "scaled_annual_energy_kwh": null
   },
   "version": "1.0",
   "simulation_time_step_minutes": 15

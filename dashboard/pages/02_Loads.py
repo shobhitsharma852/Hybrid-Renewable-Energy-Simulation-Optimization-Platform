@@ -1,11 +1,13 @@
 import streamlit as st
 import pandas as pd
 
-from core.project import load_project
+from core.project import Project, load_project, save_project
 from core.load import (
     read_uploaded_load,
     create_constant_load,
     create_daily_profile_load,
+    create_weekday_weekend_monthly_load,
+    scale_load_to_annual_energy,
     resample_load_to_timestep,
     save_load,
     summarize_load,
@@ -32,6 +34,50 @@ time_step_minutes = int(project.simulation_time_step_minutes)
 st.info(f"Simulation time resolution: **{time_step_minutes} min** — load data will be resampled to this resolution when simulation runs.")
 
 st.divider()
+st.subheader("Load Scaling")
+
+scale_enabled_default = project.load.scaled_annual_energy_kwh is not None
+scale_enabled = st.checkbox(
+    "Use scaled annual average",
+    value=scale_enabled_default,
+    help="Scale the saved load profile to a target annual energy while preserving its shape.",
+)
+
+scale_target_default = (
+    float(project.load.scaled_annual_energy_kwh)
+    if project.load.scaled_annual_energy_kwh is not None
+    else 100000.0
+)
+scaled_annual_energy_kwh = st.number_input(
+    "Target annual energy (kWh)",
+    min_value=1.0,
+    value=scale_target_default,
+    step=1000.0,
+    disabled=not scale_enabled,
+)
+
+if st.button("Save Load Scaling Settings"):
+    try:
+        updated_project = Project(
+            meta=project.meta,
+            location=project.location,
+            economics=project.economics,
+            load=type(project.load)(
+                scaled_annual_energy_kwh=(
+                    float(scaled_annual_energy_kwh) if scale_enabled else None
+                )
+            ),
+            version=project.version,
+            simulation_time_step_minutes=project.simulation_time_step_minutes,
+        )
+        save_project(updated_project, folder)
+        project = updated_project
+        st.success("Load scaling settings saved.")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Could not save load scaling settings: {e}")
+
+st.divider()
 st.subheader("Select Load Input Method")
 
 method = st.radio(
@@ -40,6 +86,7 @@ method = st.radio(
         "Upload CSV",
         "Constant Load",
         "24 Hour Profile",
+        "Weekday/Weekend + Monthly",
     ]
 )
 
@@ -52,7 +99,6 @@ load_df = None
 
 def _show_load_output(df: pd.DataFrame, ts_minutes: int = 60):
     summary = summarize_load(df)
-    time_step_hours = ts_minutes / 60.0
     steps_per_day = round(24 * 60 / ts_minutes)
 
     st.divider()
@@ -73,14 +119,18 @@ def _show_load_output(df: pd.DataFrame, ts_minutes: int = 60):
         st.subheader(f"Resampled Preview — {ts_minutes} min resolution")
         try:
             resampled_df = resample_load_to_timestep(df, ts_minutes)
+            if project.load.scaled_annual_energy_kwh is not None:
+                resampled_df = scale_load_to_annual_energy(
+                    resampled_df,
+                    float(project.load.scaled_annual_energy_kwh),
+                )
             rs_summary = summarize_load(resampled_df)
-            annual_kwh_corrected = float(resampled_df["load_kw"].sum()) * time_step_hours
 
             r1, r2, r3, r4 = st.columns(4)
             r1.metric("Resampled Rows", f"{rs_summary.rows:,}")
             r2.metric("Peak Load (kW)", f"{rs_summary.peak_kw:.2f}")
             r3.metric("Average Load (kW)", f"{rs_summary.average_kw:.2f}")
-            r4.metric("Annual Energy (kWh)", f"{annual_kwh_corrected:,.0f}")
+            r4.metric("Annual Energy (kWh)", f"{rs_summary.annual_energy_kwh:,.0f}")
 
             st.caption(f"First {steps_per_day} rows = first 24 hours at {ts_minutes}-min resolution")
             st.dataframe(resampled_df.head(steps_per_day), use_container_width=True)
@@ -91,8 +141,14 @@ def _show_load_output(df: pd.DataFrame, ts_minutes: int = 60):
         except Exception as e:
             st.warning(f"Could not resample for preview: {e}")
     else:
+        preview_df = df.copy()
+        if project.load.scaled_annual_energy_kwh is not None:
+            preview_df = scale_load_to_annual_energy(
+                preview_df,
+                float(project.load.scaled_annual_energy_kwh),
+            )
         st.subheader("Daily Load Charts (First 24 Hours)")
-        first_day = df.head(24).copy()
+        first_day = preview_df.head(24).copy()
         first_day["hour"] = range(24)
         chart_df = first_day.set_index("hour")[["load_kw"]]
 
@@ -182,6 +238,79 @@ elif method == "24 Hour Profile":
         except Exception as e:
             st.session_state.current_load_df = None
             st.error(f"Could not generate yearly load: {e}")
+
+# -----------------------------
+# Weekday / Weekend + Monthly
+# -----------------------------
+elif method == "Weekday/Weekend + Monthly":
+    st.write("Enter 24 hourly weekday values")
+    weekday_profile = []
+    weekday_cols = st.columns(6)
+
+    for i in range(24):
+        with weekday_cols[i % 6]:
+            val = st.number_input(
+                f"WD H{i}",
+                min_value=0.0,
+                value=50.0,
+                step=5.0,
+                key=f"wd_h{i}",
+            )
+            weekday_profile.append(val)
+
+    st.write("Enter 24 hourly weekend values")
+    weekend_profile = []
+    weekend_cols = st.columns(6)
+
+    for i in range(24):
+        with weekend_cols[i % 6]:
+            val = st.number_input(
+                f"WE H{i}",
+                min_value=0.0,
+                value=30.0,
+                step=5.0,
+                key=f"we_h{i}",
+            )
+            weekend_profile.append(val)
+
+    st.write("Enter monthly multipliers")
+    month_labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    monthly_multipliers = []
+    month_cols = st.columns(4)
+
+    for i, label in enumerate(month_labels):
+        with month_cols[i % 4]:
+            val = st.number_input(
+                label,
+                min_value=0.0,
+                value=1.0,
+                step=0.05,
+                key=f"month_mult_{label.lower()}",
+            )
+            monthly_multipliers.append(val)
+
+    synthetic_year = st.number_input(
+        "Synthetic load year",
+        min_value=2000,
+        max_value=2100,
+        value=2025,
+        step=1,
+    )
+
+    if st.button("Generate Synthetic Yearly Load"):
+        try:
+            load_df = create_weekday_weekend_monthly_load(
+                weekday_hourly_profile_kw=weekday_profile,
+                weekend_hourly_profile_kw=weekend_profile,
+                monthly_multipliers=monthly_multipliers,
+                year=int(synthetic_year),
+            )
+            st.session_state.current_load_df = load_df
+            st.success("Synthetic yearly load generated successfully.")
+        except Exception as e:
+            st.session_state.current_load_df = None
+            st.error(f"Could not generate synthetic load: {e}")
 
 # Use persisted dataframe if present
 if st.session_state.current_load_df is not None:
