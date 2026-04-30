@@ -5,9 +5,14 @@ import pandas as pd
 import pytest
 
 from core.load import (
+    LoadGenerationSettings,
     annual_energy_kwh,
+    create_weekday_weekend_monthly_profile_load,
     create_weekday_weekend_monthly_load,
+    load_generation_settings_file_path,
+    load_load_generation_settings,
     resample_load_to_timestep,
+    save_load_generation_settings,
     standardize_load_dataframe,
     validate_hourly_load,
     summarize_load,
@@ -99,6 +104,53 @@ def test_save_and_load_roundtrip():
     assert abs(df2["load_kw"].sum() - df["load_kw"].sum()) < 1e-9
 
 
+def test_save_and_load_generation_settings_roundtrip():
+    weekday_profiles = [[float(month + hour) for hour in range(24)] for month in range(12)]
+    weekend_profiles = [[float(100 + month + hour) for hour in range(24)] for month in range(12)]
+    settings = LoadGenerationSettings(
+        weekday_monthly_profiles_kw=weekday_profiles,
+        weekend_monthly_profiles_kw=weekend_profiles,
+        daily_variability_pct=10.0,
+        timestep_variability_pct=20.0,
+        random_seed=123,
+        preserve_annual_energy=False,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project_folder = Path(tmp) / "proj1"
+        path = save_load_generation_settings(settings, project_folder)
+        loaded = load_load_generation_settings(project_folder)
+
+    assert path.name == "load_generation.json"
+    assert loaded == settings
+
+
+def test_load_generation_settings_missing_file_returns_defaults():
+    with tempfile.TemporaryDirectory() as tmp:
+        project_folder = Path(tmp) / "proj1"
+        loaded = load_load_generation_settings(project_folder)
+
+    assert loaded.daily_variability_pct == 10.0
+    assert loaded.timestep_variability_pct == 20.0
+    assert loaded.random_seed == 42
+    assert loaded.preserve_annual_energy is True
+
+
+def test_load_generation_settings_file_path():
+    assert load_generation_settings_file_path("project_x") == Path("project_x") / "load_generation.json"
+
+
+def test_save_load_generation_settings_rejects_invalid_profiles():
+    settings = LoadGenerationSettings(
+        weekday_monthly_profiles_kw=[[1.0] * 24 for _ in range(11)],
+        weekend_monthly_profiles_kw=[[1.0] * 24 for _ in range(12)],
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(ValueError, match="weekday_monthly_profiles_kw must contain exactly 12"):
+            save_load_generation_settings(settings, Path(tmp) / "proj1")
+
+
 def test_scale_load_to_annual_energy_hits_target():
     df = make_valid_load_df()
 
@@ -154,4 +206,117 @@ def test_create_weekday_weekend_monthly_load_validates_input_lengths():
             weekday_hourly_profile_kw=[1.0] * 23,
             weekend_hourly_profile_kw=[1.0] * 24,
             monthly_multipliers=[1.0] * 12,
+        )
+
+
+def test_create_weekday_weekend_monthly_profile_load_uses_month_specific_hourly_values():
+    weekday_profiles = [[10.0] * 24 for _ in range(12)]
+    weekend_profiles = [[20.0] * 24 for _ in range(12)]
+    weekday_profiles[0][8] = 111.0
+    weekday_profiles[1][8] = 222.0
+    weekend_profiles[0][8] = 333.0
+
+    df = create_weekday_weekend_monthly_profile_load(
+        weekday_monthly_profiles_kw=weekday_profiles,
+        weekend_monthly_profiles_kw=weekend_profiles,
+        year=2025,
+    )
+
+    jan_weekday = df.loc[df["timestamp"] == pd.Timestamp("2025-01-01 08:00:00")]
+    jan_weekend = df.loc[df["timestamp"] == pd.Timestamp("2025-01-04 08:00:00")]
+    feb_weekday = df.loc[df["timestamp"] == pd.Timestamp("2025-02-03 08:00:00")]
+
+    assert float(jan_weekday["load_kw"].iloc[0]) == pytest.approx(111.0)
+    assert float(jan_weekend["load_kw"].iloc[0]) == pytest.approx(333.0)
+    assert float(feb_weekday["load_kw"].iloc[0]) == pytest.approx(222.0)
+
+
+def test_create_weekday_weekend_monthly_profile_load_validates_month_count():
+    with pytest.raises(ValueError, match="weekday_monthly_profiles_kw must contain exactly 12"):
+        create_weekday_weekend_monthly_profile_load(
+            weekday_monthly_profiles_kw=[[1.0] * 24 for _ in range(11)],
+            weekend_monthly_profiles_kw=[[1.0] * 24 for _ in range(12)],
+        )
+
+
+def test_weekday_weekend_monthly_load_daily_variability_is_repeatable():
+    kwargs = {
+        "weekday_hourly_profile_kw": [100.0] * 24,
+        "weekend_hourly_profile_kw": [100.0] * 24,
+        "monthly_multipliers": [1.0] * 12,
+        "year": 2025,
+        "daily_variability_pct": 10.0,
+        "random_seed": 123,
+        "preserve_annual_energy": False,
+    }
+
+    first = create_weekday_weekend_monthly_load(**kwargs)
+    second = create_weekday_weekend_monthly_load(**kwargs)
+
+    pd.testing.assert_frame_equal(first, second)
+
+
+def test_weekday_weekend_monthly_load_daily_variability_applies_one_multiplier_per_day():
+    df = create_weekday_weekend_monthly_load(
+        weekday_hourly_profile_kw=[100.0] * 24,
+        weekend_hourly_profile_kw=[100.0] * 24,
+        monthly_multipliers=[1.0] * 12,
+        year=2025,
+        daily_variability_pct=10.0,
+        random_seed=123,
+        preserve_annual_energy=False,
+    )
+
+    first_day = df.head(24)
+    second_day = df.iloc[24:48]
+
+    assert first_day["load_kw"].nunique() == 1
+    assert second_day["load_kw"].nunique() == 1
+    assert first_day["load_kw"].iloc[0] != pytest.approx(second_day["load_kw"].iloc[0])
+
+
+def test_weekday_weekend_monthly_load_timestep_variability_changes_within_day():
+    df = create_weekday_weekend_monthly_load(
+        weekday_hourly_profile_kw=[100.0] * 24,
+        weekend_hourly_profile_kw=[100.0] * 24,
+        monthly_multipliers=[1.0] * 12,
+        year=2025,
+        timestep_variability_pct=10.0,
+        random_seed=123,
+        preserve_annual_energy=False,
+    )
+
+    first_day = df.head(24)
+
+    assert first_day["load_kw"].nunique() > 1
+
+
+def test_weekday_weekend_monthly_load_variability_can_preserve_annual_energy():
+    baseline = create_weekday_weekend_monthly_load(
+        weekday_hourly_profile_kw=[100.0] * 24,
+        weekend_hourly_profile_kw=[80.0] * 24,
+        monthly_multipliers=[1.0, 1.2, 0.9, 1.0, 1.1, 1.2, 1.3, 1.3, 1.1, 1.0, 0.9, 1.0],
+        year=2025,
+    )
+    variable = create_weekday_weekend_monthly_load(
+        weekday_hourly_profile_kw=[100.0] * 24,
+        weekend_hourly_profile_kw=[80.0] * 24,
+        monthly_multipliers=[1.0, 1.2, 0.9, 1.0, 1.1, 1.2, 1.3, 1.3, 1.1, 1.0, 0.9, 1.0],
+        year=2025,
+        daily_variability_pct=10.0,
+        timestep_variability_pct=5.0,
+        random_seed=123,
+        preserve_annual_energy=True,
+    )
+
+    assert annual_energy_kwh(variable) == pytest.approx(annual_energy_kwh(baseline))
+
+
+def test_weekday_weekend_monthly_load_rejects_negative_variability():
+    with pytest.raises(ValueError, match="daily_variability_pct cannot be negative"):
+        create_weekday_weekend_monthly_load(
+            weekday_hourly_profile_kw=[1.0] * 24,
+            weekend_hourly_profile_kw=[1.0] * 24,
+            monthly_multipliers=[1.0] * 12,
+            daily_variability_pct=-1.0,
         )

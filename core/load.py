@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 import io
+import json
+import random
 
 import pandas as pd
 
@@ -17,14 +19,33 @@ class LoadSummary:
     min_kw: float
 
 
+@dataclass(frozen=True)
+class LoadGenerationSettings:
+    method: str = "weekday_weekend_monthly"
+    weekday_monthly_profiles_kw: list[list[float]] | None = None
+    weekend_monthly_profiles_kw: list[list[float]] | None = None
+    daily_variability_pct: float = 10.0
+    timestep_variability_pct: float = 20.0
+    random_seed: int | None = 42
+    preserve_annual_energy: bool = True
+
+
 def project_inputs_dir(project_folder: str | Path) -> Path:
     path = Path(project_folder) / "inputs"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
+def load_generation_settings_file_path(project_folder: str | Path) -> Path:
+    return Path(project_folder) / "load_generation.json"
+
+
 def load_file_path(project_folder: str | Path) -> Path:
     return project_inputs_dir(project_folder) / "load.csv"
+
+
+def default_monthly_profiles(default_kw: float) -> list[list[float]]:
+    return [[float(default_kw)] * 24 for _ in range(12)]
 
 
 def _rename_load_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -286,6 +307,10 @@ def create_weekday_weekend_monthly_load(
     weekend_hourly_profile_kw: list[float],
     monthly_multipliers: list[float],
     year: int = 2025,
+    daily_variability_pct: float = 0.0,
+    timestep_variability_pct: float = 0.0,
+    random_seed: int | None = None,
+    preserve_annual_energy: bool = True,
 ) -> pd.DataFrame:
     if len(weekday_hourly_profile_kw) != 24:
         raise ValueError("weekday_hourly_profile_kw must contain exactly 24 values")
@@ -300,31 +325,203 @@ def create_weekday_weekend_monthly_load(
     weekend_vals = [float(v) for v in weekend_hourly_profile_kw]
     month_vals = [float(v) for v in monthly_multipliers]
 
-    if any(v < 0 for v in weekday_vals):
-        raise ValueError("Weekday profile values cannot be negative")
-
-    if any(v < 0 for v in weekend_vals):
-        raise ValueError("Weekend profile values cannot be negative")
-
     if any(v < 0 for v in month_vals):
         raise ValueError("Monthly multipliers cannot be negative")
+
+    weekday_monthly_profiles = [
+        [hourly_kw * month_multiplier for hourly_kw in weekday_vals]
+        for month_multiplier in month_vals
+    ]
+    weekend_monthly_profiles = [
+        [hourly_kw * month_multiplier for hourly_kw in weekend_vals]
+        for month_multiplier in month_vals
+    ]
+
+    return create_weekday_weekend_monthly_profile_load(
+        weekday_monthly_profiles_kw=weekday_monthly_profiles,
+        weekend_monthly_profiles_kw=weekend_monthly_profiles,
+        year=year,
+        daily_variability_pct=daily_variability_pct,
+        timestep_variability_pct=timestep_variability_pct,
+        random_seed=random_seed,
+        preserve_annual_energy=preserve_annual_energy,
+    )
+
+
+def _validate_monthly_hourly_profiles(
+    profiles: list[list[float]],
+    label: str,
+) -> list[list[float]]:
+    if len(profiles) != 12:
+        raise ValueError(f"{label} must contain exactly 12 monthly profiles")
+
+    out: list[list[float]] = []
+    for month_index, monthly_profile in enumerate(profiles, start=1):
+        if len(monthly_profile) != 24:
+            raise ValueError(
+                f"{label} month {month_index} must contain exactly 24 hourly values"
+            )
+        vals = [float(v) for v in monthly_profile]
+        if any(v < 0 for v in vals):
+            raise ValueError(f"{label} values cannot be negative")
+        out.append(vals)
+
+    return out
+
+
+def validate_load_generation_settings(settings: LoadGenerationSettings) -> None:
+    if settings.method != "weekday_weekend_monthly":
+        raise ValueError("Unsupported load generation method")
+
+    weekday_profiles = settings.weekday_monthly_profiles_kw or default_monthly_profiles(50.0)
+    weekend_profiles = settings.weekend_monthly_profiles_kw or default_monthly_profiles(30.0)
+    _validate_monthly_hourly_profiles(weekday_profiles, "weekday_monthly_profiles_kw")
+    _validate_monthly_hourly_profiles(weekend_profiles, "weekend_monthly_profiles_kw")
+
+    if settings.daily_variability_pct < 0:
+        raise ValueError("daily_variability_pct cannot be negative")
+
+    if settings.timestep_variability_pct < 0:
+        raise ValueError("timestep_variability_pct cannot be negative")
+
+    if settings.random_seed is not None and int(settings.random_seed) < 0:
+        raise ValueError("random_seed cannot be negative")
+
+
+def load_generation_settings_to_dict(
+    settings: LoadGenerationSettings,
+) -> dict[str, object]:
+    validate_load_generation_settings(settings)
+    return {
+        "method": settings.method,
+        "weekday_monthly_profiles_kw": (
+            settings.weekday_monthly_profiles_kw or default_monthly_profiles(50.0)
+        ),
+        "weekend_monthly_profiles_kw": (
+            settings.weekend_monthly_profiles_kw or default_monthly_profiles(30.0)
+        ),
+        "daily_variability_pct": float(settings.daily_variability_pct),
+        "timestep_variability_pct": float(settings.timestep_variability_pct),
+        "random_seed": settings.random_seed,
+        "preserve_annual_energy": bool(settings.preserve_annual_energy),
+    }
+
+
+def load_generation_settings_from_dict(data: dict[str, object]) -> LoadGenerationSettings:
+    seed_value = data.get("random_seed", 42)
+    settings = LoadGenerationSettings(
+        method=str(data.get("method", "weekday_weekend_monthly")),
+        weekday_monthly_profiles_kw=data.get("weekday_monthly_profiles_kw"),  # type: ignore[arg-type]
+        weekend_monthly_profiles_kw=data.get("weekend_monthly_profiles_kw"),  # type: ignore[arg-type]
+        daily_variability_pct=float(data.get("daily_variability_pct", 10.0)),
+        timestep_variability_pct=float(data.get("timestep_variability_pct", 20.0)),
+        random_seed=None if seed_value is None else int(seed_value),
+        preserve_annual_energy=bool(data.get("preserve_annual_energy", True)),
+    )
+    validate_load_generation_settings(settings)
+    return settings
+
+
+def save_load_generation_settings(
+    settings: LoadGenerationSettings,
+    project_folder: str | Path,
+) -> Path:
+    validate_load_generation_settings(settings)
+    project_folder = Path(project_folder)
+    project_folder.mkdir(parents=True, exist_ok=True)
+
+    path = load_generation_settings_file_path(project_folder)
+    path.write_text(
+        json.dumps(load_generation_settings_to_dict(settings), indent=2),
+        encoding="utf-8",
+    )
+    return path
+
+
+def load_load_generation_settings(project_folder: str | Path) -> LoadGenerationSettings:
+    path = load_generation_settings_file_path(project_folder)
+    if not path.exists():
+        return LoadGenerationSettings()
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return load_generation_settings_from_dict(data)
+
+
+def create_weekday_weekend_monthly_profile_load(
+    weekday_monthly_profiles_kw: list[list[float]],
+    weekend_monthly_profiles_kw: list[list[float]],
+    year: int = 2025,
+    daily_variability_pct: float = 0.0,
+    timestep_variability_pct: float = 0.0,
+    random_seed: int | None = None,
+    preserve_annual_energy: bool = True,
+) -> pd.DataFrame:
+    weekday_profiles = _validate_monthly_hourly_profiles(
+        weekday_monthly_profiles_kw,
+        "weekday_monthly_profiles_kw",
+    )
+    weekend_profiles = _validate_monthly_hourly_profiles(
+        weekend_monthly_profiles_kw,
+        "weekend_monthly_profiles_kw",
+    )
+    daily_variability_pct = float(daily_variability_pct)
+    timestep_variability_pct = float(timestep_variability_pct)
+
+    if daily_variability_pct < 0:
+        raise ValueError("daily_variability_pct cannot be negative")
+
+    if timestep_variability_pct < 0:
+        raise ValueError("timestep_variability_pct cannot be negative")
 
     start = pd.Timestamp(f"{year}-01-01 00:00:00")
     end = pd.Timestamp(f"{year + 1}-01-01 00:00:00")
     ts = pd.date_range(start=start, end=end, freq="h", inclusive="left")
 
+    rng = random.Random(random_seed)
+    daily_multipliers: dict[pd.Timestamp, float] = {}
+
+    def _variability_multiplier(percent: float) -> float:
+        if percent <= 0:
+            return 1.0
+        spread = percent / 100.0
+        return rng.uniform(1.0 - spread, 1.0 + spread)
+
     loads: list[float] = []
     for timestamp in ts:
         is_weekend = timestamp.weekday() >= 5
-        base_profile = weekend_vals if is_weekend else weekday_vals
-        month_multiplier = month_vals[int(timestamp.month) - 1]
-        loads.append(base_profile[int(timestamp.hour)] * month_multiplier)
+        month_index = int(timestamp.month) - 1
+        base_profile = weekend_profiles[month_index] if is_weekend else weekday_profiles[month_index]
+        date_key = pd.Timestamp(timestamp.date())
+
+        if date_key not in daily_multipliers:
+            daily_multipliers[date_key] = _variability_multiplier(daily_variability_pct)
+
+        timestep_multiplier = _variability_multiplier(timestep_variability_pct)
+        load_kw = (
+            base_profile[int(timestamp.hour)]
+            * daily_multipliers[date_key]
+            * timestep_multiplier
+        )
+        loads.append(max(0.0, load_kw))
 
     df = pd.DataFrame({
         "timestamp": ts,
         "load_kw": loads,
     })
-    return validate_hourly_load(df, expect_rows=len(ts))
+    df = validate_hourly_load(df, expect_rows=len(ts))
+
+    if preserve_annual_energy and (daily_variability_pct > 0 or timestep_variability_pct > 0):
+        baseline_df = create_weekday_weekend_monthly_profile_load(
+            weekday_monthly_profiles_kw=weekday_profiles,
+            weekend_monthly_profiles_kw=weekend_profiles,
+            year=year,
+            preserve_annual_energy=False,
+        )
+        baseline_energy_kwh = annual_energy_kwh(baseline_df)
+        if baseline_energy_kwh > 0:
+            df = scale_load_to_annual_energy(df, baseline_energy_kwh)
+
+    return df
 
 
 def save_load(df: pd.DataFrame, project_folder: str | Path) -> Path:
