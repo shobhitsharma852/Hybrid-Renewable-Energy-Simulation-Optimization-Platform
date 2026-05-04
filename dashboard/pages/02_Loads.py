@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from core.project import Project, load_project, save_project
 from core.load import (
@@ -14,6 +16,10 @@ from core.load import (
     resample_load_to_timestep,
     save_load,
     summarize_load,
+    daily_load_summary,
+    load_duration_summary,
+    load_quality_messages,
+    monthly_load_summary,
     load_file_path,
 )
 from dashboard.ui.state import active_project_folder
@@ -123,6 +129,25 @@ def _apply_monthly_profile_editor_changes(
         st.session_state.weekend_monthly_profile_table = table.copy()
 
 
+def _handle_copy_weekdays_to_weekends_toggle() -> None:
+    enabled = bool(st.session_state.get("monthly_profile_copy_to_weekend", False))
+    was_enabled = bool(st.session_state.get("_monthly_profile_copy_to_weekend_prev", False))
+
+    if enabled and not was_enabled:
+        st.session_state["_weekend_monthly_profile_table_backup"] = (
+            st.session_state.weekend_monthly_profile_table.copy()
+        )
+        st.session_state.weekend_monthly_profile_table = (
+            st.session_state.weekday_monthly_profile_table.copy()
+        )
+    elif not enabled and was_enabled:
+        backup = st.session_state.get("_weekend_monthly_profile_table_backup")
+        if backup is not None:
+            st.session_state.weekend_monthly_profile_table = backup.copy()
+
+    st.session_state["_monthly_profile_copy_to_weekend_prev"] = enabled
+
+
 def _render_annual_energy_scaling() -> None:
     scaling_enabled = project.load.scaled_annual_energy_kwh is not None
 
@@ -169,9 +194,275 @@ def _render_annual_energy_scaling() -> None:
                 st.error(f"Could not save annual energy scaling settings: {e}")
 
 
+def _render_monthly_load_comparison(df: pd.DataFrame) -> None:
+    try:
+        monthly_df = monthly_load_summary(df)
+    except Exception as e:
+        st.warning(f"Could not build monthly load comparison: {e}")
+        return
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Bar(
+            x=monthly_df["month_name"],
+            y=monthly_df["energy_kwh"],
+            name="Energy (kWh)",
+            marker_color="#3b82f6",
+            opacity=0.78,
+            hovertemplate="%{x}<br>Energy: %{y:,.0f} kWh<extra></extra>",
+        ),
+        secondary_y=False,
+    )
+
+    for column, label, color in [
+        ("peak_kw", "Peak Load (kW)", "#ef4444"),
+        ("average_kw", "Average Load (kW)", "#16a34a"),
+        ("min_kw", "Minimum Load (kW)", "#7c3aed"),
+    ]:
+        fig.add_trace(
+            go.Scatter(
+                x=monthly_df["month_name"],
+                y=monthly_df[column],
+                name=label,
+                mode="lines+markers",
+                line={"color": color, "width": 2},
+                marker={"size": 7},
+                hovertemplate=f"%{{x}}<br>{label}: %{{y:,.2f}}<extra></extra>",
+            ),
+            secondary_y=True,
+        )
+
+    fig.update_layout(
+        height=460,
+        margin={"l": 20, "r": 20, "t": 35, "b": 20},
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "left",
+            "x": 0,
+        },
+        hovermode="x unified",
+        bargap=0.28,
+    )
+    fig.update_xaxes(title_text="Month")
+    fig.update_yaxes(title_text="Energy (kWh)", secondary_y=False, rangemode="tozero")
+    fig.update_yaxes(title_text="Load (kW)", secondary_y=True, rangemode="tozero")
+
+    st.subheader("Monthly Load Comparison")
+    st.plotly_chart(fig, use_container_width=True)
+
+    table_df = monthly_df.rename(
+        columns={
+            "month_name": "Month",
+            "energy_kwh": "Energy (kWh)",
+            "peak_kw": "Peak Load (kW)",
+            "average_kw": "Average Load (kW)",
+            "min_kw": "Minimum Load (kW)",
+        }
+    )
+    st.dataframe(
+        table_df[["Month", "Energy (kWh)", "Peak Load (kW)", "Average Load (kW)", "Minimum Load (kW)"]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def _render_daily_load_comparison(df: pd.DataFrame) -> None:
+    try:
+        daily_df = daily_load_summary(df)
+    except Exception as e:
+        st.warning(f"Could not build daily load comparison: {e}")
+        return
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Bar(
+            x=daily_df["date"],
+            y=daily_df["energy_kwh"],
+            name="Daily Energy (kWh)",
+            marker_color="#3b82f6",
+            opacity=0.72,
+            hovertemplate="%{x}<br>Energy: %{y:,.0f} kWh<extra></extra>",
+        ),
+        secondary_y=False,
+    )
+    for column, label, color in [
+        ("peak_kw", "Daily Peak (kW)", "#ef4444"),
+        ("average_kw", "Daily Average (kW)", "#16a34a"),
+    ]:
+        fig.add_trace(
+            go.Scatter(
+                x=daily_df["date"],
+                y=daily_df[column],
+                name=label,
+                mode="lines",
+                line={"color": color, "width": 2},
+                hovertemplate=f"%{{x}}<br>{label}: %{{y:,.2f}}<extra></extra>",
+            ),
+            secondary_y=True,
+        )
+
+    fig.update_layout(
+        height=460,
+        margin={"l": 20, "r": 20, "t": 35, "b": 20},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0},
+        hovermode="x unified",
+        bargap=0.05,
+    )
+    fig.update_xaxes(title_text="Date")
+    fig.update_yaxes(title_text="Energy (kWh)", secondary_y=False, rangemode="tozero")
+    fig.update_yaxes(title_text="Load (kW)", secondary_y=True, rangemode="tozero")
+
+    st.subheader("Daily Load Comparison")
+    st.plotly_chart(fig, use_container_width=True)
+
+    table_df = daily_df.rename(
+        columns={
+            "date": "Date",
+            "day_type": "Day Type",
+            "energy_kwh": "Energy (kWh)",
+            "peak_kw": "Peak Load (kW)",
+            "average_kw": "Average Load (kW)",
+            "min_kw": "Minimum Load (kW)",
+        }
+    )
+    st.dataframe(
+        table_df[["Date", "Day Type", "Energy (kWh)", "Peak Load (kW)", "Average Load (kW)", "Minimum Load (kW)"]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def _render_load_duration_curve(df: pd.DataFrame) -> None:
+    try:
+        duration_df = load_duration_summary(df)
+    except Exception as e:
+        st.warning(f"Could not build load duration curve: {e}")
+        return
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=duration_df["percent_of_time"],
+            y=duration_df["load_kw"],
+            name="Load (kW)",
+            mode="lines",
+            line={"color": "#2563eb", "width": 2},
+            hovertemplate="%{x:.1f}% of time<br>Load: %{y:,.2f} kW<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        height=460,
+        margin={"l": 20, "r": 20, "t": 35, "b": 20},
+        hovermode="x",
+    )
+    fig.update_xaxes(title_text="Percent of Time Load Is Met or Exceeded")
+    fig.update_yaxes(title_text="Load (kW)", rangemode="tozero")
+
+    st.subheader("Load Duration Curve")
+    st.plotly_chart(fig, use_container_width=True)
+    st.dataframe(
+        duration_df.rename(
+            columns={
+                "rank": "Rank",
+                "percent_of_time": "Percent of Time",
+                "load_kw": "Load (kW)",
+            }
+        ).head(500),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def _render_load_quality_checks(df: pd.DataFrame) -> None:
+    daily_variability_pct = float(st.session_state.get("load_daily_variability_pct", 0.0))
+    timestep_variability_pct = float(st.session_state.get("load_timestep_variability_pct", 0.0))
+    variability_enabled = daily_variability_pct > 0 or timestep_variability_pct > 0
+    random_seed_enabled = bool(st.session_state.get("load_random_seed_enabled", True))
+
+    messages = load_quality_messages(
+        df,
+        variability_enabled=variability_enabled,
+        random_seed_enabled=random_seed_enabled,
+    )
+
+    st.subheader("Load Quality Checks")
+    for item in messages:
+        if item.level == "warning":
+            st.warning(item.message)
+        elif item.level == "success":
+            st.success(item.message)
+        else:
+            st.info(item.message)
+
+
+def _prepare_simulation_ready_load(df: pd.DataFrame, ts_minutes: int) -> pd.DataFrame:
+    preview_df = df.copy()
+    if ts_minutes > 0 and len(preview_df) > 1:
+        diffs = preview_df["timestamp"].diff().dropna()
+        current_step_minutes = diffs.iloc[0].total_seconds() / 60.0
+        if abs(current_step_minutes - float(ts_minutes)) > 1e-9:
+            preview_df = resample_load_to_timestep(preview_df, ts_minutes)
+
+    if project.load.scaled_annual_energy_kwh is not None:
+        preview_df = scale_load_to_annual_energy(
+            preview_df,
+            float(project.load.scaled_annual_energy_kwh),
+        )
+
+    return preview_df
+
+
+def _render_simulation_ready_preview(df: pd.DataFrame, ts_minutes: int) -> None:
+    try:
+        preview_df = _prepare_simulation_ready_load(df, ts_minutes)
+        preview_summary = summarize_load(preview_df)
+    except Exception as e:
+        st.warning(f"Could not prepare simulation-ready load preview: {e}")
+        return
+
+    st.divider()
+    st.subheader("Simulation-Ready Load Preview")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Rows", f"{preview_summary.rows:,}")
+    c2.metric("Peak Load (kW)", f"{preview_summary.peak_kw:.2f}")
+    c3.metric("Average Load (kW)", f"{preview_summary.average_kw:.2f}")
+    c4.metric("Annual Energy (kWh)", f"{preview_summary.annual_energy_kwh:,.0f}")
+
+    preview_modes = ["Monthly", "Daily", "Load Duration"]
+    if hasattr(st, "segmented_control"):
+        preview_mode = st.segmented_control(
+            "Preview Mode",
+            preview_modes,
+            default="Monthly",
+            key="load_preview_mode",
+        )
+    else:
+        preview_mode = st.radio(
+            "Preview Mode",
+            preview_modes,
+            index=0,
+            horizontal=True,
+            key="load_preview_mode",
+        )
+
+    if preview_mode == "Monthly":
+        _render_monthly_load_comparison(preview_df)
+    elif preview_mode == "Daily":
+        _render_daily_load_comparison(preview_df)
+    else:
+        _render_load_duration_curve(preview_df)
+
+    _render_load_quality_checks(preview_df)
+
+    st.subheader("Simulation-Ready Data Preview")
+    st.dataframe(preview_df.head(24), use_container_width=True)
+
+
 def _show_load_output(df: pd.DataFrame, ts_minutes: int = 60):
     summary = summarize_load(df)
-    steps_per_day = round(24 * 60 / ts_minutes)
 
     st.divider()
     st.subheader("Load Summary (Original Data)")
@@ -185,52 +476,7 @@ def _show_load_output(df: pd.DataFrame, ts_minutes: int = 60):
     st.subheader("Original Data Preview (first 24 rows)")
     st.dataframe(df.head(24), use_container_width=True)
 
-    # ── Resampled preview ──────────────────────────────────────────────────
-    if ts_minutes != 60:
-        st.divider()
-        st.subheader(f"Resampled Preview — {ts_minutes} min resolution")
-        try:
-            resampled_df = resample_load_to_timestep(df, ts_minutes)
-            if project.load.scaled_annual_energy_kwh is not None:
-                resampled_df = scale_load_to_annual_energy(
-                    resampled_df,
-                    float(project.load.scaled_annual_energy_kwh),
-                )
-            rs_summary = summarize_load(resampled_df)
-
-            r1, r2, r3, r4 = st.columns(4)
-            r1.metric("Resampled Rows", f"{rs_summary.rows:,}")
-            r2.metric("Peak Load (kW)", f"{rs_summary.peak_kw:.2f}")
-            r3.metric("Average Load (kW)", f"{rs_summary.average_kw:.2f}")
-            r4.metric("Annual Energy (kWh)", f"{rs_summary.annual_energy_kwh:,.0f}")
-
-            st.caption(f"First {steps_per_day} rows = first 24 hours at {ts_minutes}-min resolution")
-            st.dataframe(resampled_df.head(steps_per_day), use_container_width=True)
-
-            st.subheader(f"First Day Chart — {ts_minutes} min steps")
-            first_day = resampled_df.head(steps_per_day).copy().reset_index(drop=True)
-            st.line_chart(first_day.set_index("timestamp")[["load_kw"]], use_container_width=True)
-        except Exception as e:
-            st.warning(f"Could not resample for preview: {e}")
-    else:
-        preview_df = df.copy()
-        if project.load.scaled_annual_energy_kwh is not None:
-            preview_df = scale_load_to_annual_energy(
-                preview_df,
-                float(project.load.scaled_annual_energy_kwh),
-            )
-        st.subheader("Daily Load Charts (First 24 Hours)")
-        first_day = preview_df.head(24).copy()
-        first_day["hour"] = range(24)
-        chart_df = first_day.set_index("hour")[["load_kw"]]
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.caption("Line Chart")
-            st.line_chart(chart_df, use_container_width=True)
-        with col2:
-            st.caption("Bar Chart")
-            st.bar_chart(chart_df, use_container_width=True)
+    _render_simulation_ready_preview(df, ts_minutes)
 
     st.divider()
     _render_annual_energy_scaling()
@@ -329,6 +575,11 @@ elif method == "Weekday/Weekend + Monthly":
             saved_load_settings.weekend_monthly_profiles_kw
             or [[30.0] * 24 for _ in range(12)]
         )
+        st.session_state["_weekend_monthly_profile_table_backup"] = (
+            st.session_state.weekend_monthly_profile_table.copy()
+        )
+        st.session_state["_monthly_profile_copy_to_weekend_prev"] = False
+        st.session_state["monthly_profile_copy_to_weekend"] = False
         st.session_state.load_daily_variability_pct = float(
             saved_load_settings.daily_variability_pct
         )
@@ -356,17 +607,12 @@ elif method == "Weekday/Weekend + Monthly":
         )
     with col_copy2:
         copy_to_weekend = st.checkbox(
-            "Copy weekday changes to weekend",
+            "Copy Weekdays to Weekends",
             value=False,
-            help="Keep the weekend table matched to the weekday table after edits.",
+            help="When checked, weekend values use the weekday table. Uncheck to restore the previous weekend table.",
             key="monthly_profile_copy_to_weekend",
+            on_change=_handle_copy_weekdays_to_weekends_toggle,
         )
-
-    if st.button("Copy Weekdays to Weekends"):
-        st.session_state.weekend_monthly_profile_table = (
-            st.session_state.weekday_monthly_profile_table.copy()
-        )
-        st.rerun()
 
     column_config = {
         "Hour": st.column_config.NumberColumn("Hour", width="small"),
@@ -412,7 +658,7 @@ elif method == "Weekday/Weekend + Monthly":
         st.data_editor(
             st.session_state.weekend_monthly_profile_table,
             column_config=column_config,
-            disabled=["Hour"],
+            disabled=True if copy_to_weekend else ["Hour"],
             hide_index=True,
             num_rows="fixed",
             use_container_width=True,
