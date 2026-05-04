@@ -30,6 +30,12 @@ class LoadGenerationSettings:
     preserve_annual_energy: bool = True
 
 
+@dataclass(frozen=True)
+class LoadQualityMessage:
+    level: str
+    message: str
+
+
 def project_inputs_dir(project_folder: str | Path) -> Path:
     path = Path(project_folder) / "inputs"
     path.mkdir(parents=True, exist_ok=True)
@@ -226,6 +232,170 @@ def summarize_load(df: pd.DataFrame) -> LoadSummary:
         average_kw=float(df["load_kw"].mean()),
         min_kw=float(df["load_kw"].min()),
     )
+
+
+def monthly_load_summary(df: pd.DataFrame) -> pd.DataFrame:
+    dt_hours = infer_time_step_hours(df)
+    out = df.copy()
+    out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
+    if out["timestamp"].isna().any():
+        raise ValueError("Some timestamp values are invalid")
+
+    out["load_kw"] = pd.to_numeric(out["load_kw"], errors="coerce")
+    if out["load_kw"].isna().any():
+        raise ValueError("Some load values are non-numeric")
+
+    out["month"] = out["timestamp"].dt.month
+    out["month_name"] = out["timestamp"].dt.month_name()
+
+    summary = (
+        out.groupby(["month", "month_name"], as_index=False)
+        .agg(
+            energy_kwh=("load_kw", lambda s: float(s.sum()) * dt_hours),
+            peak_kw=("load_kw", "max"),
+            average_kw=("load_kw", "mean"),
+            min_kw=("load_kw", "min"),
+        )
+        .sort_values("month")
+        .reset_index(drop=True)
+    )
+
+    return summary[["month", "month_name", "energy_kwh", "peak_kw", "average_kw", "min_kw"]]
+
+
+def daily_load_summary(df: pd.DataFrame) -> pd.DataFrame:
+    dt_hours = infer_time_step_hours(df)
+    out = df.copy()
+    out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
+    if out["timestamp"].isna().any():
+        raise ValueError("Some timestamp values are invalid")
+
+    out["load_kw"] = pd.to_numeric(out["load_kw"], errors="coerce")
+    if out["load_kw"].isna().any():
+        raise ValueError("Some load values are non-numeric")
+
+    out["date"] = out["timestamp"].dt.date
+    out["day_type"] = out["timestamp"].dt.weekday.map(lambda d: "Weekend" if d >= 5 else "Weekday")
+
+    summary = (
+        out.groupby(["date", "day_type"], as_index=False)
+        .agg(
+            energy_kwh=("load_kw", lambda s: float(s.sum()) * dt_hours),
+            peak_kw=("load_kw", "max"),
+            average_kw=("load_kw", "mean"),
+            min_kw=("load_kw", "min"),
+        )
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    return summary[["date", "day_type", "energy_kwh", "peak_kw", "average_kw", "min_kw"]]
+
+
+def load_duration_summary(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["load_kw"] = pd.to_numeric(out["load_kw"], errors="coerce")
+    if out["load_kw"].isna().any():
+        raise ValueError("Some load values are non-numeric")
+
+    sorted_load = out["load_kw"].sort_values(ascending=False).reset_index(drop=True)
+    points = len(sorted_load)
+    if points == 0:
+        return pd.DataFrame(columns=["rank", "percent_of_time", "load_kw"])
+
+    if points == 1:
+        percent_of_time = [100.0]
+    else:
+        percent_of_time = [(idx / (points - 1)) * 100.0 for idx in range(points)]
+
+    return pd.DataFrame({
+        "rank": list(range(1, points + 1)),
+        "percent_of_time": percent_of_time,
+        "load_kw": sorted_load.tolist(),
+    })
+
+
+def load_quality_messages(
+    df: pd.DataFrame,
+    *,
+    variability_enabled: bool = False,
+    random_seed_enabled: bool = True,
+) -> list[LoadQualityMessage]:
+    messages: list[LoadQualityMessage] = []
+
+    try:
+        summary = summarize_load(df)
+        monthly_df = monthly_load_summary(df)
+    except Exception as e:
+        return [LoadQualityMessage("warning", f"Load data could not be fully validated: {e}")]
+
+    if summary.rows == 0:
+        return [LoadQualityMessage("warning", "Load profile is empty.")]
+
+    if summary.annual_energy_kwh <= 0:
+        messages.append(LoadQualityMessage("warning", "Annual load energy is zero."))
+    elif summary.annual_energy_kwh < 1_000:
+        messages.append(
+            LoadQualityMessage(
+                "info",
+                f"Annual load energy is very low ({summary.annual_energy_kwh:,.0f} kWh).",
+            )
+        )
+
+    near_zero_months = monthly_df.loc[monthly_df["energy_kwh"] <= 1e-9, "month_name"].tolist()
+    if near_zero_months:
+        messages.append(
+            LoadQualityMessage(
+                "warning",
+                f"These months have zero load energy: {', '.join(near_zero_months)}.",
+            )
+        )
+
+    if summary.average_kw > 0:
+        peak_to_average = summary.peak_kw / summary.average_kw
+        if peak_to_average >= 5.0:
+            messages.append(
+                LoadQualityMessage(
+                    "warning",
+                    f"Peak load is {peak_to_average:.1f}x the average load. Check for accidental spikes.",
+                )
+            )
+        elif peak_to_average >= 3.0:
+            messages.append(
+                LoadQualityMessage(
+                    "info",
+                    f"Peak load is {peak_to_average:.1f}x the average load.",
+                )
+            )
+
+    zero_fraction = float((pd.to_numeric(df["load_kw"], errors="coerce") <= 1e-9).mean())
+    if zero_fraction >= 0.5:
+        messages.append(
+            LoadQualityMessage(
+                "warning",
+                f"{zero_fraction * 100:.0f}% of load timesteps are zero or near-zero.",
+            )
+        )
+    elif zero_fraction >= 0.2:
+        messages.append(
+            LoadQualityMessage(
+                "info",
+                f"{zero_fraction * 100:.0f}% of load timesteps are zero or near-zero.",
+            )
+        )
+
+    if variability_enabled and not random_seed_enabled:
+        messages.append(
+            LoadQualityMessage(
+                "info",
+                "Variability is enabled without a random seed, so regenerated loads may differ each time.",
+            )
+        )
+
+    if not messages:
+        messages.append(LoadQualityMessage("success", "Load quality checks passed."))
+
+    return messages
 
 
 def read_load_file(file_path: str | Path) -> pd.DataFrame:

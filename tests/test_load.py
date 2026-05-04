@@ -9,8 +9,12 @@ from core.load import (
     annual_energy_kwh,
     create_weekday_weekend_monthly_profile_load,
     create_weekday_weekend_monthly_load,
+    daily_load_summary,
+    load_duration_summary,
+    load_quality_messages,
     load_generation_settings_file_path,
     load_load_generation_settings,
+    monthly_load_summary,
     resample_load_to_timestep,
     save_load_generation_settings,
     standardize_load_dataframe,
@@ -168,6 +172,111 @@ def test_summarize_load_uses_actual_timestep():
 
     assert summary.rows == 4
     assert summary.annual_energy_kwh == pytest.approx(200.0)
+
+
+def test_monthly_load_summary_reports_energy_and_load_metrics():
+    timestamps = pd.to_datetime([
+        "2025-01-31 22:00:00",
+        "2025-01-31 23:00:00",
+        "2025-02-01 00:00:00",
+        "2025-02-01 01:00:00",
+    ])
+    df = pd.DataFrame({"timestamp": timestamps, "load_kw": [10.0, 30.0, 20.0, 40.0]})
+
+    summary = monthly_load_summary(df)
+
+    assert list(summary["month_name"]) == ["January", "February"]
+    assert summary.loc[0, "energy_kwh"] == pytest.approx(40.0)
+    assert summary.loc[0, "peak_kw"] == pytest.approx(30.0)
+    assert summary.loc[0, "average_kw"] == pytest.approx(20.0)
+    assert summary.loc[0, "min_kw"] == pytest.approx(10.0)
+    assert summary.loc[1, "energy_kwh"] == pytest.approx(60.0)
+
+
+def test_monthly_load_summary_uses_actual_timestep_for_energy():
+    timestamps = pd.date_range("2025-01-01 00:00:00", periods=4, freq="30min")
+    df = pd.DataFrame({"timestamp": timestamps, "load_kw": [100.0] * 4})
+
+    summary = monthly_load_summary(df)
+
+    assert summary.loc[0, "energy_kwh"] == pytest.approx(200.0)
+
+
+def test_daily_load_summary_reports_energy_and_load_metrics():
+    timestamps = pd.date_range("2025-01-01 00:00:00", periods=4, freq="h")
+    df = pd.DataFrame({"timestamp": timestamps, "load_kw": [10.0, 20.0, 30.0, 40.0]})
+
+    summary = daily_load_summary(df)
+
+    assert len(summary) == 1
+    assert str(summary.loc[0, "date"]) == "2025-01-01"
+    assert summary.loc[0, "day_type"] == "Weekday"
+    assert summary.loc[0, "energy_kwh"] == pytest.approx(100.0)
+    assert summary.loc[0, "peak_kw"] == pytest.approx(40.0)
+    assert summary.loc[0, "average_kw"] == pytest.approx(25.0)
+    assert summary.loc[0, "min_kw"] == pytest.approx(10.0)
+
+
+def test_daily_load_summary_uses_actual_timestep_for_energy():
+    timestamps = pd.date_range("2025-01-01 00:00:00", periods=4, freq="30min")
+    df = pd.DataFrame({"timestamp": timestamps, "load_kw": [100.0] * 4})
+
+    summary = daily_load_summary(df)
+
+    assert summary.loc[0, "energy_kwh"] == pytest.approx(200.0)
+
+
+def test_load_duration_summary_sorts_descending_and_reports_percent_time():
+    df = pd.DataFrame({"load_kw": [30.0, 10.0, 40.0, 20.0]})
+
+    summary = load_duration_summary(df)
+
+    assert list(summary["load_kw"]) == [40.0, 30.0, 20.0, 10.0]
+    assert list(summary["rank"]) == [1, 2, 3, 4]
+    assert summary.loc[0, "percent_of_time"] == pytest.approx(0.0)
+    assert summary.loc[3, "percent_of_time"] == pytest.approx(100.0)
+
+
+def test_load_quality_messages_pass_for_normal_load():
+    df = make_valid_load_df()
+
+    messages = load_quality_messages(df)
+
+    assert messages[0].level == "success"
+    assert "passed" in messages[0].message
+
+
+def test_load_quality_messages_warn_for_zero_energy_and_zero_timesteps():
+    df = make_valid_load_df()
+    df["load_kw"] = 0.0
+
+    messages = load_quality_messages(df)
+    text = " ".join(m.message for m in messages)
+
+    assert any(m.level == "warning" for m in messages)
+    assert "Annual load energy is zero" in text
+    assert "zero or near-zero" in text
+
+
+def test_load_quality_messages_warn_for_high_peak_to_average_ratio():
+    timestamps = pd.date_range("2025-01-01 00:00:00", periods=10, freq="h")
+    df = pd.DataFrame({"timestamp": timestamps, "load_kw": [1.0] * 9 + [100.0]})
+
+    messages = load_quality_messages(df)
+
+    assert any("average load" in m.message for m in messages)
+
+
+def test_load_quality_messages_note_unseeded_variability():
+    df = make_valid_load_df()
+
+    messages = load_quality_messages(
+        df,
+        variability_enabled=True,
+        random_seed_enabled=False,
+    )
+
+    assert any("without a random seed" in m.message for m in messages)
 
 
 def test_resample_load_to_timestep_uses_stepwise_repeat_for_finer_resolution():
