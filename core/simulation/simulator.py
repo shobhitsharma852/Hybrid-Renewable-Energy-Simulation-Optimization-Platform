@@ -5,8 +5,13 @@ from dataclasses import dataclass
 import pandas as pd
 
 from core.components.config import ComponentsConfig
+from core.controller.config import (
+    DEFAULT_DISPATCH_STRATEGY,
+    DispatchStrategy,
+    validate_dispatch_strategy,
+)
+from core.controller.engine import run_controller_step
 from core.optimization.design_point import DesignPoint
-from .dispatch import run_dispatch_step
 from .pv_model import compute_pv_power_from_resource_row
 from .results import (
     HourlySimulationRecord,
@@ -30,6 +35,7 @@ class SimulationInputs:
     components: ComponentsConfig
     design: DesignPoint
     time_step_hours: float = 1.0
+    dispatch_strategy: DispatchStrategy | str = DEFAULT_DISPATCH_STRATEGY
 
 
 class HybridSystemSimulator:
@@ -41,8 +47,15 @@ class HybridSystemSimulator:
         resource_df = self.inputs.resource_df.copy()
         components = self.inputs.components
         design = self.inputs.design
+        dispatch_strategy = validate_dispatch_strategy(self.inputs.dispatch_strategy)
 
-        n = min(len(load_df), len(resource_df))
+        if len(load_df) != len(resource_df):
+            raise ValueError(
+                "Load and resource data must have the same number of timesteps "
+                f"before simulation; got load={len(load_df)} and resources={len(resource_df)}"
+            )
+
+        n = len(load_df)
         hourly_records: list[HourlySimulationRecord] = []
 
         current_battery_soc_pct = (
@@ -60,7 +73,7 @@ class HybridSystemSimulator:
             pv_kw = self._get_pv_kw(resource_df, hour_index, components)
             wind_kw = self._get_wind_kw(resource_df, hour_index, components)
 
-            dispatch = run_dispatch_step(
+            dispatch = run_controller_step(
                 load_kw=load_kw,
                 pv_kw=pv_kw,
                 wind_kw=wind_kw,
@@ -71,6 +84,7 @@ class HybridSystemSimulator:
                 selected_battery_quantity=design.battery_quantity,
                 selected_converter_capacity_kw=design.converter_capacity_kw,
                 time_step_hours=self.inputs.time_step_hours,
+                dispatch_strategy=dispatch_strategy,
             )
 
             current_battery_soc_pct = dispatch.battery_soc_pct
@@ -260,6 +274,19 @@ class HybridSystemSimulator:
             summary.total_inverter_loss_kwh += r.inverter_loss_kw * dt
             summary.total_rectifier_loss_kwh += r.rectifier_loss_kw * dt
 
+        if summary.total_load_kwh > EPSILON:
+            summary.annual_capacity_shortage_pct = (
+                summary.total_unmet_load_kwh / summary.total_load_kwh
+            ) * 100.0
+        else:
+            summary.annual_capacity_shortage_pct = 0.0
+
+        if hourly_records:
+            battery_soc_values = [float(r.battery_soc_pct) for r in hourly_records]
+            summary.final_battery_soc_pct = battery_soc_values[-1]
+            summary.min_battery_soc_pct = min(battery_soc_values)
+            summary.max_battery_soc_pct = max(battery_soc_values)
+
         gross_renewable_generation_kwh = (
             summary.total_pv_generation_kwh + summary.total_wind_generation_kwh
         )
@@ -290,5 +317,6 @@ class HybridSystemSimulator:
         summary.gross_renewable_fraction = gross_renewable_fraction
         summary.direct_renewable_to_load_kwh = total_direct_renewable_to_load_kwh
         summary.renewable_from_battery_to_load_kwh = total_renewable_from_battery_to_load_kwh
+        summary.renewable_served_to_load_kwh = renewable_served_to_load_kwh
 
         return summary

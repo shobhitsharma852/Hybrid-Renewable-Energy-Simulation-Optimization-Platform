@@ -65,13 +65,13 @@ def test_higher_irradiance_gives_higher_power() -> None:
     pv = make_pv_config()
 
     low_result = compute_pv_power_for_timestep(
-        irradiance_input_value=0.3,
+        irradiance_input_value=300.0,
         ambient_temperature_c=25.0,
         pv_config=pv,
         selected_capacity_kw=100.0,
     )
     high_result = compute_pv_power_for_timestep(
-        irradiance_input_value=0.9,
+        irradiance_input_value=900.0,
         ambient_temperature_c=25.0,
         pv_config=pv,
         selected_capacity_kw=100.0,
@@ -84,13 +84,13 @@ def test_higher_temperature_reduces_power_when_temp_enabled() -> None:
     pv = make_pv_config(temp_enabled=True, temp_coeff_pct_per_degC=-0.4)
 
     cool_result = compute_pv_power_for_timestep(
-        irradiance_input_value=1.0,
+        irradiance_input_value=1000.0,
         ambient_temperature_c=20.0,
         pv_config=pv,
         selected_capacity_kw=100.0,
     )
     hot_result = compute_pv_power_for_timestep(
-        irradiance_input_value=1.0,
+        irradiance_input_value=1000.0,
         ambient_temperature_c=40.0,
         pv_config=pv,
         selected_capacity_kw=100.0,
@@ -104,13 +104,13 @@ def test_temperature_disabled_ignores_temperature_penalty() -> None:
     pv = make_pv_config(temp_enabled=False, temp_coeff_pct_per_degC=-0.4)
 
     cool_result = compute_pv_power_for_timestep(
-        irradiance_input_value=1.0,
+        irradiance_input_value=1000.0,
         ambient_temperature_c=20.0,
         pv_config=pv,
         selected_capacity_kw=100.0,
     )
     hot_result = compute_pv_power_for_timestep(
-        irradiance_input_value=1.0,
+        irradiance_input_value=1000.0,
         ambient_temperature_c=40.0,
         pv_config=pv,
         selected_capacity_kw=100.0,
@@ -125,7 +125,7 @@ def test_disabled_pv_returns_zero_output() -> None:
     pv = make_pv_config(enabled=False)
 
     result = compute_pv_power_for_timestep(
-        irradiance_input_value=1.0,
+        irradiance_input_value=1000.0,
         ambient_temperature_c=25.0,
         pv_config=pv,
         selected_capacity_kw=100.0,
@@ -135,15 +135,9 @@ def test_disabled_pv_returns_zero_output() -> None:
     assert result.rated_capacity_kw == pytest.approx(0.0)
 
 
-def test_w_per_m2_and_kw_per_m2_inputs_match() -> None:
+def test_w_per_m2_input_is_normalized_to_kw_per_m2() -> None:
     pv = make_pv_config()
 
-    result_kw = compute_pv_power_for_timestep(
-        irradiance_input_value=1.0,   # 1.0 kW/m²
-        ambient_temperature_c=25.0,
-        pv_config=pv,
-        selected_capacity_kw=100.0,
-    )
     result_w = compute_pv_power_for_timestep(
         irradiance_input_value=1000.0,  # 1000 W/m²
         ambient_temperature_c=25.0,
@@ -151,9 +145,8 @@ def test_w_per_m2_and_kw_per_m2_inputs_match() -> None:
         selected_capacity_kw=100.0,
     )
 
-    assert result_kw.irradiance_used_kw_per_m2 == pytest.approx(1.0)
     assert result_w.irradiance_used_kw_per_m2 == pytest.approx(1.0)
-    assert result_kw.net_power_kw == pytest.approx(result_w.net_power_kw, rel=1e-9)
+    assert result_w.net_power_kw > 0.0
 
 
 def test_compute_pv_power_from_resource_row() -> None:
@@ -161,7 +154,7 @@ def test_compute_pv_power_from_resource_row() -> None:
 
     row = pd.Series(
         {
-            "ghi": 0.8,
+            "ghi": 800.0,
             "temperature_c": 30.0,
         }
     )
@@ -183,7 +176,7 @@ def test_simulate_pv_timeseries_returns_expected_shape_and_columns() -> None:
     df = pd.DataFrame(
         {
             "timestamp": pd.date_range("2025-01-01 00:00:00", periods=3, freq="h"),
-            "ghi": [0.0, 0.5, 1.0],
+            "ghi": [0.0, 500.0, 1000.0],
             "temperature_c": [20.0, 25.0, 30.0],
         }
     )

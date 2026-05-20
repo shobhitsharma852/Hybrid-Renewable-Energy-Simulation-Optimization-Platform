@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any, Dict
 import json
 
+from core.controller.config import DEFAULT_DISPATCH_STRATEGY, validate_dispatch_strategy
+
 
 @dataclass(frozen=True)
 class ProjectMeta:
@@ -41,6 +43,7 @@ class Project:
     load: ProjectLoadSettings = ProjectLoadSettings()
     version: str = "1.0"
     simulation_time_step_minutes: int = 60
+    dispatch_strategy: str = DEFAULT_DISPATCH_STRATEGY
 
 
 def validate_project(project: Project) -> None:
@@ -78,6 +81,8 @@ def validate_project(project: Project) -> None:
     if project.simulation_time_step_minutes <= 0:
         raise ValueError("simulation_time_step_minutes must be > 0")
 
+    validate_dispatch_strategy(project.dispatch_strategy)
+
 
 def project_to_dict(project: Project) -> Dict[str, Any]:
     validate_project(project)
@@ -96,6 +101,7 @@ def project_from_dict(data: Dict[str, Any]) -> Project:
         load=load,
         version=data.get("version", "1.0"),
         simulation_time_step_minutes=int(data.get("simulation_time_step_minutes", 60)),
+        dispatch_strategy=str(data.get("dispatch_strategy", DEFAULT_DISPATCH_STRATEGY)),
     )
     validate_project(project)
     return project

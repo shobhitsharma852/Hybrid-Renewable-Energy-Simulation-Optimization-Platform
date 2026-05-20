@@ -13,6 +13,7 @@ from .converter_model import (
     get_rectifier_efficiency,
 )
 from .grid_model import compute_grid_export, compute_grid_import, resolve_grid_limits
+from core.controller.config import DEFAULT_DISPATCH_STRATEGY, validate_dispatch_strategy
 
 EPSILON: float = 1e-9
 VERY_LARGE_POWER_KW: float = 1e12
@@ -257,6 +258,7 @@ def run_dispatch_step(
     selected_battery_quantity: int,
     selected_converter_capacity_kw: float,
     time_step_hours: float = 1.0,
+    dispatch_strategy: str = DEFAULT_DISPATCH_STRATEGY,
 ) -> DispatchResult:
     """
     Bus assumptions:
@@ -284,6 +286,8 @@ def run_dispatch_step(
     - Inverter AC capacity is shared across ALL DC->AC flows in the timestep
     - Rectifier AC-input capacity is shared across ALL AC->DC flows in the timestep
     """
+    dispatch_strategy = validate_dispatch_strategy(dispatch_strategy)
+
     load_kw = max(0.0, float(load_kw))
     pv_kw = max(0.0, float(pv_kw))
     wind_kw = max(0.0, float(wind_kw))

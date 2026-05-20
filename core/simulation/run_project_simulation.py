@@ -10,8 +10,10 @@ from core.components.config import load_components
 from core.load import load_saved_load, resample_load_to_timestep, scale_load_to_annual_energy
 from core.optimization.design_point import DesignPoint
 from core.project import load_project
-from core.resources import resample_resources_to_timestep
+from core.controller.config import DEFAULT_DISPATCH_STRATEGY
+from core.resources import resample_resources_to_timestep, validate_resources_dataframe
 from core.simulation import HybridSystemSimulator, SimulationInputs
+from core.simulation.energy_balance import validate_energy_balance
 
 
 def _get_project_dir(project_name: str) -> Path:
@@ -26,6 +28,10 @@ def _ensure_outputs_dir(project_name: str) -> Path:
     outputs_dir = project_dir / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
     return outputs_dir
+
+
+def _project_dispatch_strategy(project) -> str:
+    return getattr(project, "dispatch_strategy", DEFAULT_DISPATCH_STRATEGY)
 
 
 def _build_default_design_point(components) -> DesignPoint:
@@ -127,6 +133,7 @@ def load_project_simulation_inputs(
 
     resource_df = pd.read_csv(resource_path)
     resource_df["timestamp"] = pd.to_datetime(resource_df["timestamp"])
+    resource_df = validate_resources_dataframe(resource_df)
 
     # Resample both datasets to the project's chosen time resolution
     if time_step_minutes != 60:
@@ -149,6 +156,7 @@ def load_project_simulation_inputs(
         components=components,
         design=selected_design,
         time_step_hours=time_step_hours,
+        dispatch_strategy=_project_dispatch_strategy(project),
     )
 
 
@@ -165,6 +173,9 @@ def save_simulation_outputs(
     hourly_df.to_csv(hourly_path, index=False)
 
     summary_dict = asdict(results.summary)
+    balance_result, _ = validate_energy_balance(hourly_df)
+    summary_dict["energy_balance"] = asdict(balance_result)
+
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary_dict, f, indent=4)
 

@@ -19,6 +19,7 @@ from core.optimization.constraints import (
 )
 from core.optimization.design_point import DesignPoint
 from core.simulation import HybridSystemSimulator, SimulationInputs
+from core.simulation.energy_balance import validate_energy_balance
 from core.simulation.run_project_simulation import load_project_simulation_inputs
 
 
@@ -61,10 +62,16 @@ class CandidateSimulationResult:
     direct_capital_cost: float = 0.0
     annual_fixed_om_cost: float = 0.0
     annual_grid_net_cost: float = 0.0
+    replacement_cost_present_value: float = 0.0
+    salvage_value_present_value: float = 0.0
     annualized_capital_cost: float = 0.0
     annualized_total_cost: float = 0.0
     net_present_cost: float = 0.0
     levelized_cost_of_energy: float = 0.0
+
+    energy_balance_passes: bool = False
+    energy_balance_failed_rows: int = 0
+    energy_balance_max_abs_mismatch_kw: float = 0.0
 
     run_success: bool = True
     error_message: str | None = None
@@ -117,10 +124,15 @@ class OptimizationSweepResult:
                     "direct_capital_cost": item.direct_capital_cost,
                     "annual_fixed_om_cost": item.annual_fixed_om_cost,
                     "annual_grid_net_cost": item.annual_grid_net_cost,
+                    "replacement_cost_present_value": item.replacement_cost_present_value,
+                    "salvage_value_present_value": item.salvage_value_present_value,
                     "annualized_capital_cost": item.annualized_capital_cost,
                     "annualized_total_cost": item.annualized_total_cost,
                     "net_present_cost": item.net_present_cost,
                     "levelized_cost_of_energy": item.levelized_cost_of_energy,
+                    "energy_balance_passes": item.energy_balance_passes,
+                    "energy_balance_failed_rows": item.energy_balance_failed_rows,
+                    "energy_balance_max_abs_mismatch_kw": item.energy_balance_max_abs_mismatch_kw,
                     "run_success": item.run_success,
                     "error_message": item.error_message,
                 }
@@ -150,6 +162,73 @@ class OptimizationSweepResult:
     def top_n(self, n: int = 10) -> pd.DataFrame:
         return self.to_dataframe().head(max(1, int(n)))
 
+    def best_solution_summary(self) -> dict[str, object]:
+        df = self.to_dataframe()
+
+        summary: dict[str, object] = {
+            "project_name": self.project_name,
+            "total_candidates": len(self.candidate_results),
+            "successful_runs": sum(1 for x in self.candidate_results if x.run_success),
+            "failed_runs": sum(1 for x in self.candidate_results if not x.run_success),
+            "feasible_candidates": sum(1 for x in self.candidate_results if x.is_feasible),
+            "best_feasible": None,
+            "lowest_npc": None,
+            "lowest_lcoe": None,
+            "technical_best": None,
+        }
+
+        if df.empty:
+            return summary
+
+        def _row_summary(row: pd.Series) -> dict[str, object]:
+            return {
+                "candidate_id": int(row["candidate_id"]),
+                "pv_capacity_kw": float(row["pv_capacity_kw"]),
+                "wind_quantity": int(row["wind_quantity"]),
+                "battery_quantity": int(row["battery_quantity"]),
+                "converter_capacity_kw": float(row["converter_capacity_kw"]),
+                "is_feasible": bool(row["is_feasible"]),
+                "failure_reasons": str(row["failure_reasons"]),
+                "annual_capacity_shortage_pct": float(row["annual_capacity_shortage_pct"]),
+                "renewable_fraction_pct": float(row["renewable_fraction_pct"]),
+                "net_present_cost": float(row["net_present_cost"]),
+                "levelized_cost_of_energy": float(row["levelized_cost_of_energy"]),
+                "annualized_total_cost": float(row["annualized_total_cost"]),
+                "energy_balance_passes": bool(row["energy_balance_passes"]),
+            }
+
+        successful_df = df.loc[df["run_success"] == True].copy()  # noqa: E712
+        feasible_df = successful_df.loc[successful_df["is_feasible"] == True].copy()  # noqa: E712
+
+        if not feasible_df.empty:
+            summary["best_feasible"] = _row_summary(feasible_df.iloc[0])
+
+            lowest_npc_df = feasible_df.sort_values(
+                by=["net_present_cost", "levelized_cost_of_energy"],
+                ascending=[True, True],
+            )
+            summary["lowest_npc"] = _row_summary(lowest_npc_df.iloc[0])
+
+            lowest_lcoe_df = feasible_df.sort_values(
+                by=["levelized_cost_of_energy", "net_present_cost"],
+                ascending=[True, True],
+            )
+            summary["lowest_lcoe"] = _row_summary(lowest_lcoe_df.iloc[0])
+
+        if not successful_df.empty:
+            technical_df = successful_df.sort_values(
+                by=[
+                    "annual_capacity_shortage_pct",
+                    "reserve_shortfall_hours",
+                    "renewable_fraction_pct",
+                    "net_present_cost",
+                ],
+                ascending=[True, True, False, True],
+            )
+            summary["technical_best"] = _row_summary(technical_df.iloc[0])
+
+        return summary
+
 
 def _get_project_dir(project_name: str) -> Path:
     project_dir = Path("projects") / project_name
@@ -173,6 +252,7 @@ def _build_candidate_result(
     economic_eval,
 ) -> CandidateSimulationResult:
     summary = simulation_results.summary
+    balance_result, _ = validate_energy_balance(simulation_results.to_dataframe())
 
     total_load_kwh = float(summary.total_load_kwh)
     total_unmet_load_kwh = float(summary.total_unmet_load_kwh)
@@ -210,10 +290,15 @@ def _build_candidate_result(
         direct_capital_cost=float(economic_eval.direct_capital_cost),
         annual_fixed_om_cost=float(economic_eval.annual_fixed_om_cost),
         annual_grid_net_cost=float(economic_eval.annual_grid_net_cost),
+        replacement_cost_present_value=float(economic_eval.replacement_cost_present_value),
+        salvage_value_present_value=float(economic_eval.salvage_value_present_value),
         annualized_capital_cost=float(economic_eval.annualized_capital_cost),
         annualized_total_cost=float(economic_eval.annualized_total_cost),
         net_present_cost=float(economic_eval.net_present_cost),
         levelized_cost_of_energy=float(economic_eval.levelized_cost_of_energy),
+        energy_balance_passes=balance_result.failed_rows == 0,
+        energy_balance_failed_rows=int(balance_result.failed_rows),
+        energy_balance_max_abs_mismatch_kw=float(balance_result.max_abs_mismatch_kw),
         run_success=True,
         error_message=None,
     )
@@ -256,6 +341,8 @@ def run_optimization_sweep(
                 resource_df=base_inputs.resource_df,
                 components=base_inputs.components,
                 design=design,
+                time_step_hours=base_inputs.time_step_hours,
+                dispatch_strategy=base_inputs.dispatch_strategy,
             )
 
             simulator = HybridSystemSimulator(sim_inputs)
@@ -266,6 +353,7 @@ def run_optimization_sweep(
                 components=base_inputs.components,
                 design=design,
                 simulation_results=simulation_results,
+                time_step_hours=base_inputs.time_step_hours,
             )
 
             economic_eval = evaluate_candidate_economics(
@@ -322,6 +410,7 @@ def save_optimization_sweep_outputs(
         "successful_runs": sum(1 for x in sweep_result.candidate_results if x.run_success),
         "failed_runs": sum(1 for x in sweep_result.candidate_results if not x.run_success),
         "feasible_candidates": sum(1 for x in sweep_result.candidate_results if x.is_feasible),
+        "best_solution_summary": sweep_result.best_solution_summary(),
     }
 
     with open(meta_path, "w", encoding="utf-8") as f:

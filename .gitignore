@@ -12,6 +12,11 @@ env/
 # Streamlit
 .streamlit/
 
+# Test/runtime scratch
+.pytest_tmp/
+test_runtime/
+test_runtime_tmp/
+
 # OS
 .DS_Store
 Thumbs.db

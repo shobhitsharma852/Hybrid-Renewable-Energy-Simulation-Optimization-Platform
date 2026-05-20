@@ -51,16 +51,16 @@ class WindPowerCurveSettings:
     # X-axis points: wind speed in m/s
     wind_speed_points_mps: list[float] = field(
         default_factory=lambda: [
-            0.0, 4.0, 4.01, 5.0, 6.0, 7.0, 8.0, 9.0,
-            10.0, 11.0, 12.0, 13.0, 14.0, 16.0, 25.0
+            0.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0,
+            11.0, 12.0, 13.0, 14.0, 16.0, 20.0, 25.0, 25.0
         ]
     )
 
     # Y-axis points: output power in kW
     power_output_points_kw: list[float] = field(
         default_factory=lambda: [
-            0.0, 0.0, 80.0, 150.0, 250.0, 400.0, 600.0, 850.0,
-            1150.0, 1350.0, 1450.0, 1490.0, 1500.0, 1500.0, 0.0
+            0.0, 0.0, 80.0, 150.0, 250.0, 400.0, 600.0, 850.0, 1150.0,
+            1350.0, 1450.0, 1490.0, 1500.0, 1500.0, 1500.0, 1500.0, 0.0
         ]
     )
 

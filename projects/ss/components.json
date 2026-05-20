@@ -1,0 +1,166 @@
+{
+  "pv": {
+    "enabled": true,
+    "use_search_space": true,
+    "capacity_kw_options": [
+      1700.0,
+      2000.0
+    ],
+    "capital_cost_per_kw": 2500.0,
+    "replacement_cost_per_kw": 2500.0,
+    "om_cost_per_kw_per_year": 10.0,
+    "lifetime_years": 25,
+    "derating_factor": 0.8,
+    "bus": "DC",
+    "mppt": {
+      "enabled": false,
+      "lifetime_years": 15,
+      "sizing_mode": "ratio",
+      "pv_to_conv_ratio_options": [
+        1.0
+      ],
+      "capacity_kw_options": [
+        1.0
+      ],
+      "efficiency_pct": 95.0,
+      "use_efficiency_table": false
+    },
+    "orientation": {
+      "enabled": true,
+      "ground_reflectance_pct": 0.0,
+      "tracking_system": "no_tracking",
+      "use_default_slope": true,
+      "panel_slope_deg": null,
+      "use_default_azimuth": true,
+      "panel_azimuth_deg": null,
+      "use_clearness_index_cap": true,
+      "kt_max": 0.82
+    },
+    "temperature": {
+      "enabled": false,
+      "temperature_coefficient_pct_per_degC": -0.5,
+      "nominal_operating_cell_temp_c": 47.0,
+      "efficiency_stc_pct": 13.0
+    }
+  },
+  "wind": {
+    "enabled": false,
+    "use_search_space": false,
+    "turbine_model_name": "Generic 1.5 MW",
+    "rated_capacity_kw": 1500.0,
+    "quantity_options": [
+      2
+    ],
+    "capital_cost_per_turbine": 3000000.0,
+    "replacement_cost_per_turbine": 3000000.0,
+    "om_cost_per_turbine_per_year": 30000.0,
+    "lifetime_years": 20,
+    "hub_height_m": 50.0,
+    "consider_temperature_effects": false,
+    "bus": "AC",
+    "power_curve": {
+      "enabled": true,
+      "wind_speed_points_mps": [
+        0.0,
+        4.0,
+        4.0,
+        5.0,
+        6.0,
+        7.0,
+        8.0,
+        9.0,
+        10.0,
+        11.0,
+        12.0,
+        13.0,
+        14.0,
+        16.0,
+        20.0,
+        25.0,
+        25.0
+      ],
+      "power_output_points_kw": [
+        0.0,
+        0.0,
+        80.0,
+        150.0,
+        250.0,
+        400.0,
+        600.0,
+        850.0,
+        1150.0,
+        1350.0,
+        1450.0,
+        1490.0,
+        1500.0,
+        1500.0,
+        1500.0,
+        1500.0,
+        0.0
+      ]
+    },
+    "losses": {
+      "enabled": true,
+      "availability_losses_pct": 0.0,
+      "turbine_performance_losses_pct": 0.0,
+      "environmental_losses_pct": 0.0,
+      "other_losses_pct": 0.0,
+      "wake_effects_losses_pct": 0.0,
+      "electrical_losses_pct": 0.0,
+      "curtailment_losses_pct": 0.0
+    },
+    "maintenance": {
+      "enabled": false
+    }
+  },
+  "battery": {
+    "enabled": false,
+    "use_search_space": false,
+    "battery_model_name": "Generic 1MWh Li-Ion",
+    "quantity_options": [
+      0,
+      5,
+      10
+    ],
+    "nominal_voltage_v": 600.0,
+    "nominal_capacity_kwh_per_string": 1000.0,
+    "roundtrip_efficiency_pct": 90.0,
+    "max_charge_current_a": 1670.0,
+    "max_discharge_current_a": 5000.0,
+    "string_size": 1,
+    "initial_state_of_charge_pct": 100.0,
+    "minimum_state_of_charge_pct": 20.0,
+    "throughput_kwh": 3000000.0,
+    "capital_cost_per_string": 700000.0,
+    "replacement_cost_per_string": 700000.0,
+    "om_cost_per_string_per_year": 10000.0,
+    "lifetime_years": 15
+  },
+  "converter": {
+    "enabled": true,
+    "use_search_space": true,
+    "converter_model_name": "System Converter",
+    "capacity_kw_options": [
+      300.0,
+      500.0,
+      700.0
+    ],
+    "capital_cost_per_kw": 300.0,
+    "replacement_cost_per_kw": 300.0,
+    "om_cost_per_kw_per_year": 0.0,
+    "inverter_lifetime_years": 15,
+    "inverter_efficiency_pct": 95.0,
+    "rectifier_relative_capacity_pct": 100.0,
+    "rectifier_efficiency_pct": 95.0,
+    "parallel_with_ac_generator": false
+  },
+  "grid": {
+    "enabled": true,
+    "grid_power_price_per_kwh": 0.1,
+    "grid_sellback_price_per_kwh": 0.05,
+    "sale_capacity_kw": 999999.0,
+    "purchase_capacity_kw": 999999.0,
+    "net_metering_enabled": false,
+    "co2_emissions_g_per_kwh": 632.0
+  }
+}

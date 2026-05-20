@@ -52,12 +52,17 @@ class SimulationSummary:
     total_rectifier_loss_kwh: float = 0.0
 
     renewable_fraction: float = 0.0
+    annual_capacity_shortage_pct: float = 0.0
 
     # Extra reporting metrics
     gross_renewable_fraction: float = 0.0
     direct_renewable_to_load_kwh: float = 0.0
     renewable_from_battery_to_load_kwh: float = 0.0
     renewable_served_to_load_kwh: float = 0.0
+
+    final_battery_soc_pct: float = 0.0
+    min_battery_soc_pct: float = 0.0
+    max_battery_soc_pct: float = 0.0
 
 
 @dataclass

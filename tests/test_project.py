@@ -112,3 +112,16 @@ def test_non_positive_scaled_annual_energy_raises():
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(ValueError):
             save_project(p, Path(tmp) / "x")
+
+
+def test_invalid_dispatch_strategy_raises():
+    p = Project(
+        meta=ProjectMeta(name="BadDispatch"),
+        location=ProjectLocation(lat=25.0, lon=71.0, timezone="Asia/Kolkata"),
+        economics=ProjectEconomics(),
+        dispatch_strategy="grid_first",
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(ValueError):
+            save_project(p, Path(tmp) / "x")
