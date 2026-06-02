@@ -29,6 +29,7 @@ class HourlySimulationRecord:
     # Converter losses
     inverter_loss_kw: float = 0.0
     rectifier_loss_kw: float = 0.0
+    self_discharge_loss_kwh: float = 0.0
 
 
 @dataclass
@@ -47,9 +48,14 @@ class SimulationSummary:
     total_battery_charge_kwh: float = 0.0              # DC into battery
     total_battery_discharge_kwh: float = 0.0           # AC delivered from battery path
     total_battery_discharge_dc_kwh: float = 0.0        # DC out of battery
+    # Total energy cycled through battery over the simulated period.
+    # Used for throughput-based replacement timing (min of calendar vs throughput life).
+    # Reference: HOMER Pro battery replacement methodology (NREL/TP-710-42565).
+    total_battery_throughput_kwh: float = 0.0
 
     total_inverter_loss_kwh: float = 0.0
     total_rectifier_loss_kwh: float = 0.0
+    total_self_discharge_loss_kwh: float = 0.0
 
     renewable_fraction: float = 0.0
     annual_capacity_shortage_pct: float = 0.0

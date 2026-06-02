@@ -199,16 +199,33 @@ def _build_default_assumptions_for_project(
             20.0,
         )
 
-        real_discount_rate_pct = _first_numeric_attr(
+        nominal_discount_rate_pct = _first_numeric_attr(
             economics,
             [
-                "discount_rate",
-                "real_discount_rate_pct",
-                "discount_rate_pct",
                 "nominal_discount_rate_pct",
+                "discount_rate",
+                "discount_rate_pct",
             ],
-            8.0,
+            10.0,
         )
+
+        inflation_rate_pct = _first_numeric_attr(
+            economics,
+            ["inflation_rate_pct", "inflation_rate"],
+            6.0,
+        )
+
+        # Fisher equation: real = (nominal - inflation) / (1 + inflation/100)
+        # HOMER Pro applies this conversion internally before all discounting.
+        # Reference: NREL/TP-710-42565 p.12; Irving Fisher "Theory of Interest" (1930)
+        if inflation_rate_pct > EPSILON:
+            real_discount_rate_pct = (
+                (nominal_discount_rate_pct - inflation_rate_pct)
+                / (1.0 + inflation_rate_pct / 100.0)
+            )
+        else:
+            real_discount_rate_pct = nominal_discount_rate_pct
+
     except Exception:
         pass
 
@@ -345,8 +362,39 @@ def _wind_lifetime_years(components: ComponentsConfig) -> float:
     return max(1.0, _first_numeric_attr(components.wind, ["lifetime_years"], 20.0))
 
 
-def _battery_lifetime_years(components: ComponentsConfig) -> float:
-    return max(1.0, _first_numeric_attr(components.battery, ["lifetime_years"], 15.0))
+def _battery_lifetime_years(components: ComponentsConfig, simulation_results=None) -> float:
+    """
+    Effective battery lifetime = min(calendar_life, throughput_life).
+
+    Matches HOMER Pro's battery replacement timing:
+    - Calendar life: user-entered years (e.g. 15 years)
+    - Throughput life: lifetime_throughput_kwh / annual_throughput_kwh from simulation
+
+    Whichever limit is hit first triggers a replacement.
+    Reference: NREL/TP-710-42565; HOMER Pro Battery documentation.
+    """
+    calendar_life = max(1.0, _first_numeric_attr(
+        components.battery, ["lifetime_years"], 15.0
+    ))
+
+    if simulation_results is None:
+        return calendar_life
+
+    lifetime_throughput_kwh = _first_numeric_attr(
+        components.battery, ["throughput_kwh"], 0.0
+    )
+    if lifetime_throughput_kwh <= EPSILON:
+        return calendar_life
+
+    annual_throughput_kwh = max(0.0, float(
+        getattr(getattr(simulation_results, "summary", None),
+                "total_battery_throughput_kwh", 0.0)
+    ))
+    if annual_throughput_kwh <= EPSILON:
+        return calendar_life
+
+    throughput_life = lifetime_throughput_kwh / annual_throughput_kwh
+    return max(1.0, min(calendar_life, throughput_life))
 
 
 def _converter_lifetime_years(components: ComponentsConfig) -> float:
@@ -456,9 +504,12 @@ def evaluate_candidate_economics(
         _wind_total_replacement_cost(components, design),
         _wind_lifetime_years(components), N, r,
     )
+    # Battery effective lifetime = min(calendar life, throughput life)
+    batt_effective_life = _battery_lifetime_years(components, simulation_results)
+
     batt_repl_pv = _replacement_present_value(
         _battery_total_replacement_cost(components, design),
-        _battery_lifetime_years(components), N, r,
+        batt_effective_life, N, r,
     )
     conv_repl_pv = _replacement_present_value(
         _converter_total_replacement_cost(components, design),
@@ -477,7 +528,7 @@ def evaluate_candidate_economics(
     )
     batt_salv_pv = _salvage_present_value(
         _battery_total_replacement_cost(components, design),
-        _battery_lifetime_years(components), N, r,
+        batt_effective_life, N, r,
     )
     conv_salv_pv = _salvage_present_value(
         _converter_total_replacement_cost(components, design),

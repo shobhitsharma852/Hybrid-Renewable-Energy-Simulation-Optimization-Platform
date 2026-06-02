@@ -24,8 +24,15 @@ class ProjectLocation:
 
 @dataclass(frozen=True)
 class ProjectEconomics:
-    discount_rate: float = 8.0
-    inflation_rate: float = 2.0
+    # Nominal discount rate (%) — entered by user before inflation adjustment.
+    # The evaluator converts this to a real rate using the Fisher equation:
+    #   real = (nominal - inflation) / (1 + inflation/100)
+    # Reference: HOMER Pro methodology (NREL/TP-710-42565); Fisher (1930).
+    nominal_discount_rate_pct: float = 10.0
+
+    # Annual inflation rate (%) used in Fisher equation conversion.
+    inflation_rate_pct: float = 6.0
+
     project_lifetime_years: int = 25
     annual_capacity_shortage: float = 0.0
 
@@ -63,11 +70,17 @@ def validate_project(project: Project) -> None:
     if project.economics.project_lifetime_years <= 0:
         raise ValueError("Project lifetime must be > 0 years")
 
-    if project.economics.discount_rate < 0:
-        raise ValueError("Discount rate must be >= 0")
+    if project.economics.nominal_discount_rate_pct < 0:
+        raise ValueError("Nominal discount rate must be >= 0")
 
-    if project.economics.inflation_rate < 0:
+    if project.economics.inflation_rate_pct < 0:
         raise ValueError("Inflation rate must be >= 0")
+
+    if project.economics.nominal_discount_rate_pct < project.economics.inflation_rate_pct:
+        raise ValueError(
+            "Nominal discount rate must be >= inflation rate "
+            "(real discount rate would be negative)"
+        )
 
     if project.economics.annual_capacity_shortage < 0:
         raise ValueError("Annual capacity shortage must be >= 0")
@@ -92,7 +105,17 @@ def project_to_dict(project: Project) -> Dict[str, Any]:
 def project_from_dict(data: Dict[str, Any]) -> Project:
     meta = ProjectMeta(**data["meta"])
     location = ProjectLocation(**data["location"])
-    economics = ProjectEconomics(**data["economics"])
+
+    # Backward-compatible economics loading:
+    # Old JSON uses "discount_rate" / "inflation_rate" field names.
+    # New JSON uses "nominal_discount_rate_pct" / "inflation_rate_pct".
+    econ_raw = dict(data.get("economics", {}))
+    if "discount_rate" in econ_raw and "nominal_discount_rate_pct" not in econ_raw:
+        econ_raw["nominal_discount_rate_pct"] = econ_raw.pop("discount_rate")
+    if "inflation_rate" in econ_raw and "inflation_rate_pct" not in econ_raw:
+        econ_raw["inflation_rate_pct"] = econ_raw.pop("inflation_rate")
+    economics = ProjectEconomics(**econ_raw)
+
     load = ProjectLoadSettings(**data.get("load", {}))
     project = Project(
         meta=meta,

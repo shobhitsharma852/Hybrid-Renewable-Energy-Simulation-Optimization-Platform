@@ -14,6 +14,54 @@ class BatteryChargeDischargeResult:
     available_discharge_energy_kwh: float
     max_charge_power_kw: float
     max_discharge_power_kw: float
+    # kWh of energy that physically passed through the battery this step.
+    # = charge input kWh OR discharge output kWh (only one occurs per step).
+    # Used to track cumulative throughput for degradation / replacement timing.
+    throughput_kwh_this_step: float = 0.0
+
+
+def compute_self_discharge_loss(
+    *,
+    current_soc_pct: float,
+    total_capacity_kwh: float,
+    minimum_soc_pct: float,
+    self_discharge_rate_pct_per_day: float,
+    time_step_hours: float,
+) -> tuple[float, float]:
+    """
+    Compute passive energy lost to self-discharge over one timestep.
+
+    Self-discharge reduces stored energy proportionally to how much is stored,
+    but cannot take SOC below minimum_soc_pct (battery cannot self-discharge
+    below its protection threshold).
+
+    Formula:
+        loss = stored_energy × rate_per_day × (dt_hours / 24)
+
+    Reference: HOMER Pro Battery → Self-Discharge Rate.
+    Typical values: Li-Ion 0.05–0.1 %/day, Lead-acid 0.1–0.3 %/day.
+
+    Returns
+    -------
+    (new_soc_pct, actual_loss_kwh)
+    """
+    if self_discharge_rate_pct_per_day <= 0.0 or total_capacity_kwh <= 0.0:
+        return current_soc_pct, 0.0
+
+    current_soc_pct = max(0.0, min(100.0, float(current_soc_pct)))
+    minimum_soc_pct = max(0.0, min(100.0, float(minimum_soc_pct)))
+
+    stored_kwh = total_capacity_kwh * (current_soc_pct / 100.0)
+    min_stored_kwh = total_capacity_kwh * (minimum_soc_pct / 100.0)
+
+    loss_fraction = (self_discharge_rate_pct_per_day / 100.0) * (time_step_hours / 24.0)
+    loss_kwh = stored_kwh * loss_fraction
+
+    new_stored_kwh = max(min_stored_kwh, stored_kwh - loss_kwh)
+    actual_loss_kwh = stored_kwh - new_stored_kwh
+    new_soc_pct = 100.0 * new_stored_kwh / total_capacity_kwh
+
+    return new_soc_pct, actual_loss_kwh
 
 
 def _split_roundtrip_efficiency(roundtrip_efficiency_pct: float) -> tuple[float, float]:
@@ -198,6 +246,10 @@ def update_battery_state(
     stored_energy_kwh = max(min_allowed_energy_kwh, min(max_allowed_energy_kwh, stored_energy_kwh))
     new_soc_pct = 100.0 * stored_energy_kwh / total_capacity_kwh
 
+    # Throughput = energy that moved through the battery this step.
+    # Only charge OR discharge occurs per step, so summing is safe (one is always 0).
+    throughput_kwh_this_step = (battery_charge_kw + battery_discharge_kw) * time_step_hours
+
     return BatteryChargeDischargeResult(
         battery_charge_kw=battery_charge_kw,
         battery_discharge_kw=battery_discharge_kw,
@@ -207,4 +259,5 @@ def update_battery_state(
         available_discharge_energy_kwh=max(0.0, stored_energy_kwh - min_allowed_energy_kwh),
         max_charge_power_kw=current_charge_limit_kw,
         max_discharge_power_kw=current_discharge_limit_kw,
+        throughput_kwh_this_step=throughput_kwh_this_step,
     )

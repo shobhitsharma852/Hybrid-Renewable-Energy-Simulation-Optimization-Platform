@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .battery_soc import update_battery_state
+from .battery_soc import compute_self_discharge_loss, update_battery_state
 from .converter_model import (
     convert_ac_to_dc,
     convert_dc_to_ac,
@@ -43,6 +43,7 @@ class DispatchResult:
 
     inverter_loss_kw: float
     rectifier_loss_kw: float
+    self_discharge_loss_kwh: float = 0.0
 
 
 def _safe_getattr(obj: Any, name: str, default: Any) -> Any:
@@ -300,6 +301,25 @@ def run_dispatch_step(
     battery_enabled = bool(_safe_getattr(battery_config, "enabled", False)) and selected_battery_quantity > 0
     grid_limits = resolve_grid_limits(grid_config)
 
+    # --- SELF-DISCHARGE ---
+    # Applied before charge/discharge so all subsequent logic sees the
+    # already-reduced SOC. Happens every timestep regardless of charge/discharge.
+    self_discharge_loss_kwh = 0.0
+    if battery_enabled:
+        total_capacity_kwh = (
+            float(_safe_getattr(battery_config, "nominal_capacity_kwh_per_string", 0.0))
+            * selected_battery_quantity
+        )
+        battery_soc_pct, self_discharge_loss_kwh = compute_self_discharge_loss(
+            current_soc_pct=battery_soc_pct,
+            total_capacity_kwh=total_capacity_kwh,
+            minimum_soc_pct=float(_safe_getattr(battery_config, "minimum_state_of_charge_pct", 0.0)),
+            self_discharge_rate_pct_per_day=float(
+                _safe_getattr(battery_config, "self_discharge_rate_pct_per_day", 0.0)
+            ),
+            time_step_hours=time_step_hours,
+        )
+
     # Shared converter budgets for THIS timestep
     remaining_inverter_ac_capacity_kw = get_inverter_capacity_kw(
         converter_config=converter_config,
@@ -549,4 +569,5 @@ def run_dispatch_step(
         battery_energy_removed_kwh=battery_energy_removed_kwh,
         inverter_loss_kw=inverter_loss_kw,
         rectifier_loss_kw=rectifier_loss_kw,
+        self_discharge_loss_kwh=self_discharge_loss_kwh,
     )

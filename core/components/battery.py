@@ -94,6 +94,11 @@ class BatteryComponentConfig:
     # Lifetime throughput (kWh)
     throughput_kwh: float = 3_000_000.0
 
+    # Self-discharge rate (% of stored energy lost per day when idle).
+    # Li-Ion typical: 0.05–0.1 %/day.  Lead-acid typical: 0.1–0.3 %/day.
+    # Reference: HOMER Pro Battery → Self-Discharge Rate parameter.
+    self_discharge_rate_pct_per_day: float = 0.05
+
     # --------------------------------------------------------
     # ECONOMIC PARAMETERS
     # --------------------------------------------------------
@@ -187,6 +192,9 @@ def validate_battery_component(battery: BatteryComponentConfig) -> None:
 
     if battery.throughput_kwh < 0:
         raise ValueError("Battery throughput_kwh cannot be negative")
+
+    if not (0.0 <= battery.self_discharge_rate_pct_per_day <= 100.0):
+        raise ValueError("Battery self_discharge_rate_pct_per_day must be between 0 and 100")
 
     # --------------------------------------------------------
     # ECONOMIC PARAMETERS

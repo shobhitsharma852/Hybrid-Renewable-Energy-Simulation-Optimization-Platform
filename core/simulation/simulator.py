@@ -141,6 +141,7 @@ class HybridSystemSimulator:
                     grid_export_kw=dispatch.grid_export_kw,
                     inverter_loss_kw=dispatch.inverter_loss_kw,
                     rectifier_loss_kw=dispatch.rectifier_loss_kw,
+                    self_discharge_loss_kwh=dispatch.self_discharge_loss_kwh,
                 )
             )
 
@@ -273,6 +274,11 @@ class HybridSystemSimulator:
             summary.total_battery_discharge_dc_kwh += r.battery_discharge_dc_kw * dt
             summary.total_inverter_loss_kwh += r.inverter_loss_kw * dt
             summary.total_rectifier_loss_kwh += r.rectifier_loss_kw * dt
+            summary.total_self_discharge_loss_kwh += r.self_discharge_loss_kwh
+            # Throughput: charge input + DC discharge output (one is always 0 per step)
+            summary.total_battery_throughput_kwh += (
+                r.battery_charge_kw + r.battery_discharge_dc_kw
+            ) * dt
 
         if summary.total_load_kwh > EPSILON:
             summary.annual_capacity_shortage_pct = (
