@@ -10,6 +10,7 @@ from dashboard.ui.layout import top_bar
 from dashboard.ui.sidebar import render_left_panel
 from core.optimization.design_point import DesignPoint
 from core.optimization.optimizer import run_optimization_sweep
+from core.project import load_project
 from core.simulation.run_project_simulation import run_project_simulation
 
 
@@ -170,6 +171,14 @@ def _metric_value(meta: dict | None, key: str, default=0):
     return meta.get(key, default)
 
 
+def _get_currency_symbol(project_name: str) -> str:
+    try:
+        project = load_project(Path("projects") / project_name)
+        return project.meta.currency_symbol
+    except Exception:
+        return "₹"
+
+
 # ============================================================
 # MAIN CONTROLS
 # ============================================================
@@ -184,6 +193,8 @@ selected_project = st.selectbox(
     options=projects,
     index=projects.index("Hybrid") if "Hybrid" in projects else 0,
 )
+
+currency_symbol = _get_currency_symbol(selected_project)
 
 c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.0, 1.0])
 
@@ -275,8 +286,8 @@ best_lcoe = (
 )
 
 k1, k2 = st.columns(2)
-k1.metric("Best Feasible NPC", f"{best_npc:,.2f}" if pd.notna(best_npc) else "N/A")
-k2.metric("Best Feasible LCOE", f"{best_lcoe:,.4f}" if pd.notna(best_lcoe) else "N/A")
+k1.metric("Best Feasible NPC", f"{currency_symbol} {best_npc:,.2f}" if pd.notna(best_npc) else "N/A")
+k2.metric("Best Feasible LCOE", f"{currency_symbol}/kWh {best_lcoe:,.4f}" if pd.notna(best_lcoe) else "N/A")
 
 # ============================================================
 # TABLE
@@ -358,13 +369,13 @@ with detail_right:
 
     d1.metric("Capacity Shortage (%)", f"{_safe_float(selected_row.get('annual_capacity_shortage_pct')):,.4f}")
     d2.metric("Renewable Fraction (%)", f"{_safe_float(selected_row.get('renewable_fraction_pct')):,.4f}")
-    d3.metric("NPC", f"{_safe_float(selected_row.get('net_present_cost')):,.2f}")
-    d4.metric("LCOE", f"{_safe_float(selected_row.get('levelized_cost_of_energy')):,.4f}")
-    d5.metric("Annualized Total Cost", f"{_safe_float(selected_row.get('annualized_total_cost')):,.2f}")
-    d6.metric("Direct Capital Cost", f"{_safe_float(selected_row.get('direct_capital_cost')):,.2f}")
+    d3.metric("NPC", f"{currency_symbol} {_safe_float(selected_row.get('net_present_cost')):,.2f}")
+    d4.metric("LCOE", f"{currency_symbol}/kWh {_safe_float(selected_row.get('levelized_cost_of_energy')):,.4f}")
+    d5.metric("Annualized Total Cost", f"{currency_symbol} {_safe_float(selected_row.get('annualized_total_cost')):,.2f}")
+    d6.metric("Direct Capital Cost", f"{currency_symbol} {_safe_float(selected_row.get('direct_capital_cost')):,.2f}")
 
 extra1, extra2, extra3 = st.columns(3)
-extra1.metric("Annual Grid Net Cost", f"{_safe_float(selected_row.get('annual_grid_net_cost')):,.2f}")
+extra1.metric("Annual Grid Net Cost", f"{currency_symbol} {_safe_float(selected_row.get('annual_grid_net_cost')):,.2f}")
 extra2.metric("Reserve Shortfall Hours", f"{_safe_int(selected_row.get('reserve_shortfall_hours')):,}")
 extra3.metric("Run Success", str(_safe_bool(selected_row.get('run_success'))))
 

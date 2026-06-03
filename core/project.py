@@ -13,6 +13,10 @@ class ProjectMeta:
     name: str
     author: str = ""
     description: str = ""
+    # Display-only currency label — no conversion is done.
+    # Matches HOMER Pro behaviour: same numbers, different symbol.
+    currency_symbol: str = "₹"
+    currency_name: str = "INR"
 
 
 @dataclass(frozen=True)
