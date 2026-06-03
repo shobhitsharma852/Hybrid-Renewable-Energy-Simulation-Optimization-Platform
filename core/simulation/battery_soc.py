@@ -84,7 +84,137 @@ class BatteryChargeDischargeResult:
 
 
 # ============================================================
-# SECTION 2 — SELF-DISCHARGE
+# SECTION 2 — CAPACITY FADE
+# ============================================================
+
+def apply_capacity_fade(
+    *,
+    battery_state: BatteryState,
+    nominal_capacity_kwh: float,
+    elapsed_hours: float,
+    capacity_fade_pct_per_efc: float,
+    calendar_fade_pct_per_year: float,
+    end_of_life_soh_pct: float,
+) -> BatteryState:
+    """
+    Apply linear capacity fade to battery_state based on cycling and calendar aging.
+
+    Called once per timestep after dispatch, using the updated cumulative throughput.
+    Returns a new BatteryState with effective_capacity_kwh and soh_pct updated.
+    If both fade rates are zero, returns battery_state unchanged (zero-cost path).
+
+    FADE MODEL
+    ----------
+    We use a linear approximation to the full Arrhenius / power-law aging model
+    (Schmalstieg et al. 2014).  It is the same approach used in HOMER Pro's
+    simplified battery degradation mode and in Lazard LCOS v7.0:
+
+        cycle_fade_pct    = capacity_fade_pct_per_efc × EFC
+        calendar_fade_pct = calendar_fade_pct_per_year × elapsed_years
+        soh_pct           = 100 - cycle_fade_pct - calendar_fade_pct
+
+    EFC (Equivalent Full Cycle):
+        EFC = cumulative_throughput_kwh / (2 × nominal_capacity_kwh)
+
+    The factor of 2 in the EFC denominator:
+        One full cycle = one full charge (nominal_capacity_kwh) plus one full
+        discharge (nominal_capacity_kwh) = 2 × nominal_capacity_kwh of throughput.
+        Dividing total throughput by this converts kWh-cycled to full-cycle count.
+    References: IEEE 2030.2.1; Xu et al. (2016) Applied Energy.
+
+    SOC RECLAMPING AFTER CAPACITY SHRINK
+    ------------------------------------
+    When effective_capacity_kwh decreases, absolute stored energy (kWh) stays
+    the same but the SOC percentage rises.  If stored energy would exceed the
+    new (smaller) capacity, SOC is clamped to 100%:
+        stored_kwh  = old_capacity × (old_soc_pct / 100)
+        new_soc_pct = min(100, 100 × stored_kwh / new_capacity)
+
+    EOL CLAMP
+    ---------
+    Capacity is clamped at end_of_life_soh_pct — below EOL the battery would
+    be replaced.  Replacement economics (cost, timing) are computed separately
+    by the economics evaluator using lifetime_years and throughput_kwh.
+
+    Parameters
+    ----------
+    battery_state : BatteryState
+        Current state AFTER dispatch (contains updated cumulative_throughput_kwh).
+    nominal_capacity_kwh : float
+        Battery's original rated capacity (constant throughout simulation).
+        = nominal_capacity_kwh_per_string × n_strings.
+        Used as the EFC denominator and as the 100%-SoH reference.
+    elapsed_hours : float
+        Total simulation hours elapsed so far (used for calendar aging).
+        Typically (hour_index + 1) × time_step_hours.
+    capacity_fade_pct_per_efc : float
+        % capacity lost per EFC from cycling.  0.0 = disabled.
+    calendar_fade_pct_per_year : float
+        % capacity lost per year from calendar aging.  0.0 = disabled.
+    end_of_life_soh_pct : float
+        SoH floor — capacity will not fall below this × nominal.
+        Typically 80.0 per IEC 62619:2022.
+
+    Returns
+    -------
+    BatteryState with updated soc_pct, effective_capacity_kwh, soh_pct.
+    cumulative_throughput_kwh is carried forward unchanged.
+
+    References
+    ----------
+    Schmalstieg et al. (2014) J. Power Sources 309:86-95
+    Pelletier et al. (2017) J. Power Sources 359:468-479
+    NREL/TP-5400-74010 — BESS degradation modeling
+    IEC 62619:2022 — Safety requirements for secondary lithium cells
+    Xu et al. (2016) Applied Energy 177:537-545
+    """
+    # Fast path: both rates zero means no fade requested — return unchanged.
+    if capacity_fade_pct_per_efc <= 0.0 and calendar_fade_pct_per_year <= 0.0:
+        return battery_state
+
+    if nominal_capacity_kwh <= 0.0:
+        return battery_state
+
+    # ---- Cycle fade ----
+    # EFC = total throughput / (2 × nominal capacity).
+    # The 2× denominator accounts for both charge and discharge halves of each cycle.
+    efc = battery_state.cumulative_throughput_kwh / (2.0 * nominal_capacity_kwh)
+    cycle_fade_pct = capacity_fade_pct_per_efc * efc
+
+    # ---- Calendar fade ----
+    elapsed_years = elapsed_hours / 8760.0
+    calendar_fade_pct = calendar_fade_pct_per_year * elapsed_years
+
+    # ---- Combined SoH — clamped at EOL floor ----
+    # Below end_of_life_soh_pct, the battery is replaced; the model does not
+    # degrade further — replacement cost is handled by the economics evaluator.
+    new_soh_pct = max(
+        float(end_of_life_soh_pct),
+        min(100.0, 100.0 - cycle_fade_pct - calendar_fade_pct),
+    )
+
+    # Scale effective capacity proportionally to SoH.
+    new_effective_capacity_kwh = nominal_capacity_kwh * (new_soh_pct / 100.0)
+
+    # ---- SOC reclamp ----
+    # Absolute stored energy is unchanged; SOC% rises when capacity shrinks.
+    # Cap at 100% (excess would be unphysical — treated as if battery is full).
+    old_stored_kwh = battery_state.effective_capacity_kwh * (battery_state.soc_pct / 100.0)
+    if new_effective_capacity_kwh > 0.0:
+        new_soc_pct = min(100.0, 100.0 * old_stored_kwh / new_effective_capacity_kwh)
+    else:
+        new_soc_pct = 0.0
+
+    return BatteryState(
+        soc_pct=new_soc_pct,
+        effective_capacity_kwh=new_effective_capacity_kwh,
+        cumulative_throughput_kwh=battery_state.cumulative_throughput_kwh,
+        soh_pct=new_soh_pct,
+    )
+
+
+# ============================================================
+# SECTION 3 — SELF-DISCHARGE
 # ============================================================
 
 def compute_self_discharge_loss(
@@ -134,7 +264,7 @@ def compute_self_discharge_loss(
 
 
 # ============================================================
-# SECTION 3 — EFFICIENCY HELPERS
+# SECTION 4 — EFFICIENCY HELPERS
 # ============================================================
 
 def _split_roundtrip_efficiency(roundtrip_efficiency_pct: float) -> tuple[float, float]:
@@ -154,7 +284,7 @@ def _split_roundtrip_efficiency(roundtrip_efficiency_pct: float) -> tuple[float,
 
 
 # ============================================================
-# SECTION 4 — CURRENT-BASED POWER LIMIT HELPERS
+# SECTION 5 — CURRENT-BASED POWER LIMIT HELPERS
 # ============================================================
 
 def _compute_charge_power_limit_kw(
@@ -202,7 +332,7 @@ def _compute_discharge_power_limit_kw(
 
 
 # ============================================================
-# SECTION 5 — MAIN BATTERY STEP UPDATE
+# SECTION 6 — MAIN BATTERY STEP UPDATE
 # ============================================================
 
 def update_battery_state(

@@ -12,7 +12,7 @@ from core.controller.config import (
 )
 from core.controller.engine import run_controller_step
 from core.optimization.design_point import DesignPoint
-from .battery_soc import BatteryState
+from .battery_soc import BatteryState, apply_capacity_fade
 from .pv_model import compute_pv_power_from_resource_row
 from .results import (
     HourlySimulationRecord,
@@ -107,9 +107,24 @@ class HybridSystemSimulator:
                 dispatch_strategy=dispatch_strategy,
             )
 
-            # Carry the updated battery state forward to the next timestep.
-            # This is the only mutation in the loop — everything else is read-only.
+            # Step 1: carry dispatch-updated state (new SOC, throughput) forward.
             battery_state = dispatch.updated_battery_state
+
+            # Step 2: apply capacity fade based on accumulated throughput and
+            # elapsed time.  Fade is applied AFTER throughput is updated so that
+            # the degradation from the current step is reflected immediately.
+            # elapsed_hours uses (hour_index + 1) so the first step = 1 × dt,
+            # not 0 — avoids a zero-calendar-aging edge case at step 0.
+            battery_state = apply_capacity_fade(
+                battery_state=battery_state,
+                nominal_capacity_kwh=initial_effective_capacity_kwh,
+                elapsed_hours=(hour_index + 1) * self.inputs.time_step_hours,
+                capacity_fade_pct_per_efc=(
+                    components.battery.capacity_fade_pct_per_equivalent_full_cycle
+                ),
+                calendar_fade_pct_per_year=components.battery.calendar_fade_pct_per_year,
+                end_of_life_soh_pct=components.battery.end_of_life_soh_pct,
+            )
             dt = self.inputs.time_step_hours
 
             direct_renewable_to_load_kwh = (
@@ -158,18 +173,20 @@ class HybridSystemSimulator:
                     battery_charge_kw=dispatch.battery_charge_kw,
                     battery_discharge_kw=dispatch.battery_discharge_kw,
                     battery_discharge_dc_kw=dispatch.battery_discharge_dc_kw,
-                    battery_soc_pct=dispatch.battery_soc_pct,
+                    # Post-fade SOC: capacity may have shrunk since dispatch ran,
+                    # so the SOC% is recalculated by apply_capacity_fade to keep
+                    # the stored-energy accounting consistent.
+                    battery_soc_pct=battery_state.soc_pct,
                     grid_import_kw=dispatch.grid_import_kw,
                     grid_export_kw=dispatch.grid_export_kw,
                     inverter_loss_kw=dispatch.inverter_loss_kw,
                     rectifier_loss_kw=dispatch.rectifier_loss_kw,
                     self_discharge_loss_kwh=dispatch.self_discharge_loss_kwh,
-                    # Battery health — read from updated_battery_state so the hourly
-                    # results DataFrame records the degradation curve over time.
-                    # Once capacity fade is active, effective_capacity_kwh will drift
-                    # downward and soh_pct will fall from 100 toward ~80 (EOL).
-                    effective_capacity_kwh=dispatch.updated_battery_state.effective_capacity_kwh,
-                    soh_pct=dispatch.updated_battery_state.soh_pct,
+                    # Battery health — taken from post-fade battery_state so the
+                    # hourly DataFrame captures the degradation curve over the year.
+                    # effective_capacity_kwh drifts down from nominal as SoH falls.
+                    effective_capacity_kwh=battery_state.effective_capacity_kwh,
+                    soh_pct=battery_state.soh_pct,
                 )
             )
 

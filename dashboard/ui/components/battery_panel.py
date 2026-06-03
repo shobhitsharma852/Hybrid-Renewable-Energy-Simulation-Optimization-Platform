@@ -163,6 +163,86 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
             key="ui_battery_lifetime_years",
         )
 
+        self_discharge_rate_pct_per_day = st.number_input(
+            "Self-Discharge Rate (%/day)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(
+                st.session_state.get(
+                    "battery_self_discharge_rate_pct_per_day",
+                    DEFAULT_BATTERY.self_discharge_rate_pct_per_day,
+                )
+            ),
+            step=0.01,
+            format="%.3f",
+            help="Li-Ion typical: 0.05–0.1 %/day. Lead-acid: 0.1–0.3 %/day.",
+            key="ui_battery_self_discharge_rate_pct_per_day",
+        )
+
+    st.subheader("Capacity Fade")
+    st.caption(
+        "Capacity fade models gradual loss of usable energy over cycling and calendar time. "
+        "Set both rates to 0 to disable (no degradation). "
+        "Li-Ion NMC typical: 0.0033–0.0067 %/EFC cycle fade, 1.5–2.5 %/year calendar fade."
+    )
+
+    cf1, cf2, cf3 = st.columns(3)
+
+    with cf1:
+        capacity_fade_pct_per_equivalent_full_cycle = st.number_input(
+            "Cycle Fade (%/EFC)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(
+                st.session_state.get(
+                    "battery_capacity_fade_pct_per_efc",
+                    DEFAULT_BATTERY.capacity_fade_pct_per_equivalent_full_cycle,
+                )
+            ),
+            step=0.001,
+            format="%.4f",
+            help=(
+                "% of rated capacity lost per Equivalent Full Cycle (EFC). "
+                "1 EFC = 1 full charge + 1 full discharge. "
+                "0 = no cycle-based fade."
+            ),
+            key="ui_battery_capacity_fade_pct_per_efc",
+        )
+
+    with cf2:
+        calendar_fade_pct_per_year = st.number_input(
+            "Calendar Fade (%/year)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(
+                st.session_state.get(
+                    "battery_calendar_fade_pct_per_year",
+                    DEFAULT_BATTERY.calendar_fade_pct_per_year,
+                )
+            ),
+            step=0.1,
+            format="%.2f",
+            help="% of rated capacity lost per year at rest. 0 = no calendar aging.",
+            key="ui_battery_calendar_fade_pct_per_year",
+        )
+
+    with cf3:
+        end_of_life_soh_pct = st.number_input(
+            "End-of-Life SoH (%)",
+            min_value=0.0,
+            max_value=99.0,
+            value=float(
+                st.session_state.get(
+                    "battery_end_of_life_soh_pct",
+                    DEFAULT_BATTERY.end_of_life_soh_pct,
+                )
+            ),
+            step=1.0,
+            format="%.1f",
+            help="SoH threshold below which the battery is at end of life. IEC 62619: 80% for Li-Ion.",
+            key="ui_battery_end_of_life_soh_pct",
+        )
+
     st.subheader("Cost Settings")
 
     c3, c4, c5 = st.columns(3)
@@ -233,6 +313,12 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
                 initial_state_of_charge_pct=float(initial_state_of_charge_pct),
                 minimum_state_of_charge_pct=float(minimum_state_of_charge_pct),
                 throughput_kwh=float(throughput_kwh),
+                self_discharge_rate_pct_per_day=float(self_discharge_rate_pct_per_day),
+                capacity_fade_pct_per_equivalent_full_cycle=float(
+                    capacity_fade_pct_per_equivalent_full_cycle
+                ),
+                calendar_fade_pct_per_year=float(calendar_fade_pct_per_year),
+                end_of_life_soh_pct=float(end_of_life_soh_pct),
                 capital_cost_per_string=float(capital_cost_per_string),
                 replacement_cost_per_string=float(replacement_cost_per_string),
                 om_cost_per_string_per_year=float(om_cost_per_string_per_year),
@@ -264,6 +350,10 @@ def build_battery_component_from_state(
     initial_state_of_charge_pct: float,
     minimum_state_of_charge_pct: float,
     throughput_kwh: float,
+    self_discharge_rate_pct_per_day: float,
+    capacity_fade_pct_per_equivalent_full_cycle: float,
+    calendar_fade_pct_per_year: float,
+    end_of_life_soh_pct: float,
     capital_cost_per_string: float,
     replacement_cost_per_string: float,
     om_cost_per_string_per_year: float,
@@ -285,6 +375,12 @@ def build_battery_component_from_state(
         initial_state_of_charge_pct=float(initial_state_of_charge_pct),
         minimum_state_of_charge_pct=float(minimum_state_of_charge_pct),
         throughput_kwh=float(throughput_kwh),
+        self_discharge_rate_pct_per_day=float(self_discharge_rate_pct_per_day),
+        capacity_fade_pct_per_equivalent_full_cycle=float(
+            capacity_fade_pct_per_equivalent_full_cycle
+        ),
+        calendar_fade_pct_per_year=float(calendar_fade_pct_per_year),
+        end_of_life_soh_pct=float(end_of_life_soh_pct),
         capital_cost_per_string=float(capital_cost_per_string),
         replacement_cost_per_string=float(replacement_cost_per_string),
         om_cost_per_string_per_year=float(om_cost_per_string_per_year),
