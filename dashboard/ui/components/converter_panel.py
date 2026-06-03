@@ -18,7 +18,7 @@ def _parse_float_list(text: str) -> list[float]:
     return values
 
 
-def render_converter_component_panel() -> None:
+def render_converter_component_panel(currency_symbol: str = "₹") -> None:
     st.header("🔄 Converter")
 
     st.subheader("Basic Settings")
@@ -69,7 +69,7 @@ def render_converter_component_panel() -> None:
 
     with c2:
         capital_cost_per_kw = st.number_input(
-            "Capital Cost per kW",
+            f"Capital Cost per kW ({currency_symbol})",
             min_value=0.0,
             value=float(st.session_state.get("ui_converter_capital_cost_per_kw", DEFAULT_CONVERTER.capital_cost_per_kw)),
             step=10.0,
@@ -77,7 +77,7 @@ def render_converter_component_panel() -> None:
         )
 
         replacement_cost_per_kw = st.number_input(
-            "Replacement Cost per kW",
+            f"Replacement Cost per kW ({currency_symbol})",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -90,7 +90,7 @@ def render_converter_component_panel() -> None:
         )
 
         om_cost_per_kw_per_year = st.number_input(
-            "O&M Cost per kW per Year",
+            f"O&M Cost per kW per Year ({currency_symbol})",
             min_value=0.0,
             value=float(
                 st.session_state.get(

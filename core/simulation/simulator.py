@@ -12,6 +12,7 @@ from core.controller.config import (
 )
 from core.controller.engine import run_controller_step
 from core.optimization.design_point import DesignPoint
+from .battery_soc import BatteryState
 from .pv_model import compute_pv_power_from_resource_row
 from .results import (
     HourlySimulationRecord,
@@ -58,10 +59,26 @@ class HybridSystemSimulator:
         n = len(load_df)
         hourly_records: list[HourlySimulationRecord] = []
 
-        current_battery_soc_pct = (
-            components.battery.initial_state_of_charge_pct
-            if components.battery.enabled and design.battery_quantity > 0
+        # Initialise mutable battery runtime state once, then carry it step-to-step
+        # via dispatch.updated_battery_state.  Using a dataclass rather than a bare
+        # float means future battery features (capacity fade, rainflow counting, etc.)
+        # only need a new field on BatteryState — this initialisation is the only place
+        # that needs to know nominal capacity; the dispatch chain reads effective_capacity_kwh.
+        battery_enabled = components.battery.enabled and design.battery_quantity > 0
+        initial_soc_pct = (
+            components.battery.initial_state_of_charge_pct if battery_enabled else 0.0
+        )
+        # effective_capacity_kwh starts at nominal (n_strings × kWh_per_string).
+        # Once capacity fade is implemented, this will be updated annually as the
+        # battery ages and effective_capacity_kwh shrinks below nominal.
+        initial_effective_capacity_kwh = (
+            components.battery.nominal_capacity_kwh_per_string * design.battery_quantity
+            if battery_enabled
             else 0.0
+        )
+        battery_state = BatteryState(
+            soc_pct=initial_soc_pct,
+            effective_capacity_kwh=initial_effective_capacity_kwh,
         )
 
         renewable_energy_in_battery_kwh = 0.0
@@ -77,7 +94,10 @@ class HybridSystemSimulator:
                 load_kw=load_kw,
                 pv_kw=pv_kw,
                 wind_kw=wind_kw,
-                current_battery_soc_pct=current_battery_soc_pct,
+                # Pass the full BatteryState object instead of a bare SOC float.
+                # dispatch.updated_battery_state carries the new SOC, cumulative throughput,
+                # and any other per-step state back out to the next iteration.
+                battery_state=battery_state,
                 battery_config=components.battery,
                 converter_config=components.converter,
                 grid_config=components.grid,
@@ -87,7 +107,9 @@ class HybridSystemSimulator:
                 dispatch_strategy=dispatch_strategy,
             )
 
-            current_battery_soc_pct = dispatch.battery_soc_pct
+            # Carry the updated battery state forward to the next timestep.
+            # This is the only mutation in the loop — everything else is read-only.
+            battery_state = dispatch.updated_battery_state
             dt = self.inputs.time_step_hours
 
             direct_renewable_to_load_kwh = (
@@ -142,6 +164,12 @@ class HybridSystemSimulator:
                     inverter_loss_kw=dispatch.inverter_loss_kw,
                     rectifier_loss_kw=dispatch.rectifier_loss_kw,
                     self_discharge_loss_kwh=dispatch.self_discharge_loss_kwh,
+                    # Battery health — read from updated_battery_state so the hourly
+                    # results DataFrame records the degradation curve over time.
+                    # Once capacity fade is active, effective_capacity_kwh will drift
+                    # downward and soh_pct will fall from 100 toward ~80 (EOL).
+                    effective_capacity_kwh=dispatch.updated_battery_state.effective_capacity_kwh,
+                    soh_pct=dispatch.updated_battery_state.soh_pct,
                 )
             )
 

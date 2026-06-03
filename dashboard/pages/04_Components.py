@@ -19,6 +19,7 @@ from dashboard.ui.components_state import (
     sync_last_rendered_component_before_switch,
     sync_selected_component_to_draft,
 )
+from core.project import load_project
 from dashboard.ui.layout import top_bar
 from dashboard.ui.sidebar import render_left_panel
 from dashboard.ui.state import active_project_folder
@@ -42,17 +43,24 @@ def _sync_component_before_switch() -> None:
     sync_last_rendered_component_before_switch(st.session_state)
 
 
-def _render_selected_component(selected_component: str) -> None:
+def _get_currency_symbol(folder: Path) -> str:
+    try:
+        return load_project(folder).meta.currency_symbol
+    except Exception:
+        return "₹"
+
+
+def _render_selected_component(selected_component: str, currency_symbol: str) -> None:
     if selected_component == "PV":
-        render_pv_component_panel()
+        render_pv_component_panel(currency_symbol=currency_symbol)
     elif selected_component == "Wind":
-        render_wind_component_panel()
+        render_wind_component_panel(currency_symbol=currency_symbol)
     elif selected_component == "Battery":
-        render_battery_component_panel()
+        render_battery_component_panel(currency_symbol=currency_symbol)
     elif selected_component == "Converter":
-        render_converter_component_panel()
+        render_converter_component_panel(currency_symbol=currency_symbol)
     elif selected_component == "Grid":
-        render_grid_component_panel()
+        render_grid_component_panel(currency_symbol=currency_symbol)
 
 
 # ============================================================
@@ -73,6 +81,7 @@ initialize_component_session(st.session_state, folder)
 
 project_name_for_display = folder.name.replace("_", " ")
 st.success(f"Project: {project_name_for_display}")
+currency_symbol = _get_currency_symbol(folder)
 
 st.divider()
 
@@ -87,7 +96,7 @@ selected_component = st.radio(
 st.divider()
 
 prepare_component_ui_state(st.session_state, selected_component)
-_render_selected_component(selected_component)
+_render_selected_component(selected_component, currency_symbol)
 
 sync_selected_component_to_draft(st.session_state, selected_component)
 st.session_state["_last_rendered_component"] = selected_component

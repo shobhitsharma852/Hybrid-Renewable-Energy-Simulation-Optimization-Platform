@@ -18,7 +18,7 @@ def _parse_int_list(text: str) -> list[int]:
     return values
 
 
-def render_battery_component_panel() -> None:
+def render_battery_component_panel(currency_symbol: str = "₹") -> None:
     st.header("🔋 Battery / Storage")
 
     st.subheader("Basic Settings")
@@ -169,7 +169,7 @@ def render_battery_component_panel() -> None:
 
     with c3:
         capital_cost_per_string = st.number_input(
-            "Capital Cost per String",
+            f"Capital Cost per String ({currency_symbol})",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -183,7 +183,7 @@ def render_battery_component_panel() -> None:
 
     with c4:
         replacement_cost_per_string = st.number_input(
-            "Replacement Cost per String",
+            f"Replacement Cost per String ({currency_symbol})",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -197,7 +197,7 @@ def render_battery_component_panel() -> None:
 
     with c5:
         om_cost_per_string_per_year = st.number_input(
-            "O&M Cost per String per Year",
+            f"O&M Cost per String per Year ({currency_symbol})",
             min_value=0.0,
             value=float(
                 st.session_state.get(

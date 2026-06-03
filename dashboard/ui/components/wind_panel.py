@@ -40,7 +40,7 @@ def _select_index(options: list[str], value: str) -> int:
         return 0
 
 
-def render_wind_component_panel() -> None:
+def render_wind_component_panel(currency_symbol: str = "₹") -> None:
     st.header("🌬 Wind Turbine")
 
     st.subheader("Basic Settings")
@@ -92,7 +92,7 @@ def render_wind_component_panel() -> None:
 
     with c2:
         capital_cost = st.number_input(
-            "Capital Cost per Turbine ",
+            f"Capital Cost per Turbine ({currency_symbol})",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -104,7 +104,7 @@ def render_wind_component_panel() -> None:
         )
 
         replacement_cost = st.number_input(
-            "Replacement Cost per Turbine ",
+            f"Replacement Cost per Turbine ({currency_symbol})",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -116,7 +116,7 @@ def render_wind_component_panel() -> None:
         )
 
         om_cost = st.number_input(
-            "O&M Cost per Turbine per Year ",
+            f"O&M Cost per Turbine per Year ({currency_symbol})",
             min_value=0.0,
             value=float(
                 st.session_state.get(

@@ -6,7 +6,7 @@ from core.components.grid import GridComponentConfig
 from core.controller.engine import run_controller_step
 from core.economics.evaluator import EconomicAssumptions
 from core.optimization.optimizer import run_optimization_sweep, save_optimization_sweep_outputs
-from core.simulation.battery_soc import update_battery_state
+from core.simulation.battery_soc import BatteryState, update_battery_state
 from core.simulation.dispatch import run_dispatch_step
 from core.simulation.wind_model import _compute_total_losses_pct
 
@@ -21,11 +21,13 @@ def test_wind_losses_are_multiplicative():
 
 
 def test_grid_export_respects_sale_capacity():
+    # Battery disabled: effective_capacity_kwh=0.0 is harmless but keeps the
+    # BatteryState API consistent — dispatch will skip battery logic when disabled.
     result = run_dispatch_step(
         load_kw=0.0,
         pv_kw=0.0,
         wind_kw=1200.0,  # AC surplus
-        current_battery_soc_pct=50.0,
+        battery_state=BatteryState(soc_pct=50.0, effective_capacity_kwh=0.0),
         battery_config=BatteryComponentConfig(enabled=False),
         converter_config=ConverterComponentConfig(),
         grid_config=GridComponentConfig(
@@ -48,7 +50,7 @@ def test_grid_import_respects_purchase_capacity():
         load_kw=1500.0,
         pv_kw=0.0,
         wind_kw=0.0,
-        current_battery_soc_pct=50.0,
+        battery_state=BatteryState(soc_pct=50.0, effective_capacity_kwh=0.0),
         battery_config=BatteryComponentConfig(enabled=False),
         converter_config=ConverterComponentConfig(),
         grid_config=GridComponentConfig(
@@ -71,7 +73,7 @@ def test_explicit_renewable_first_dispatch_matches_default():
         load_kw=400.0,
         pv_kw=300.0,
         wind_kw=100.0,
-        current_battery_soc_pct=50.0,
+        battery_state=BatteryState(soc_pct=50.0, effective_capacity_kwh=0.0),
         battery_config=BatteryComponentConfig(enabled=False),
         converter_config=ConverterComponentConfig(inverter_efficiency_pct=95.0),
         grid_config=GridComponentConfig(
@@ -95,7 +97,7 @@ def test_renewable_first_controller_matches_dispatch_executor():
         load_kw=400.0,
         pv_kw=300.0,
         wind_kw=100.0,
-        current_battery_soc_pct=50.0,
+        battery_state=BatteryState(soc_pct=50.0, effective_capacity_kwh=0.0),
         battery_config=BatteryComponentConfig(enabled=False),
         converter_config=ConverterComponentConfig(inverter_efficiency_pct=95.0),
         grid_config=GridComponentConfig(
@@ -120,7 +122,7 @@ def test_unknown_dispatch_strategy_fails_fast():
             load_kw=0.0,
             pv_kw=0.0,
             wind_kw=0.0,
-            current_battery_soc_pct=50.0,
+            battery_state=BatteryState(soc_pct=50.0, effective_capacity_kwh=0.0),
             battery_config=BatteryComponentConfig(enabled=False),
             converter_config=ConverterComponentConfig(),
             grid_config=GridComponentConfig(enabled=True),
@@ -132,13 +134,16 @@ def test_unknown_dispatch_strategy_fails_fast():
 
 
 def test_battery_charge_power_scales_with_quantity_strings():
+    # effective_capacity_kwh = nominal_capacity_kwh_per_string × quantity_strings.
+    # Power limits (V × I × n_strings) scale with quantity_strings regardless of
+    # capacity, so we can verify scaling with any capacity that fits the SOC range.
     one_string = update_battery_state(
         current_soc_pct=50.0,
         surplus_kw=1e9,
         deficit_kw=0.0,
         battery_enabled=True,
         quantity_strings=1,
-        nominal_capacity_kwh_per_string=1000.0,
+        effective_capacity_kwh=1000.0,   # 1 string × 1000 kWh/string
         nominal_voltage_v=600.0,
         max_charge_current_a=100.0,
         max_discharge_current_a=100.0,
@@ -153,7 +158,7 @@ def test_battery_charge_power_scales_with_quantity_strings():
         deficit_kw=0.0,
         battery_enabled=True,
         quantity_strings=5,
-        nominal_capacity_kwh_per_string=1000.0,
+        effective_capacity_kwh=5000.0,   # 5 strings × 1000 kWh/string
         nominal_voltage_v=600.0,
         max_charge_current_a=100.0,
         max_discharge_current_a=100.0,
@@ -176,7 +181,7 @@ def test_battery_discharge_power_scales_with_quantity_strings():
         deficit_kw=1e9,
         battery_enabled=True,
         quantity_strings=1,
-        nominal_capacity_kwh_per_string=1000.0,
+        effective_capacity_kwh=1000.0,   # 1 string × 1000 kWh/string
         nominal_voltage_v=600.0,
         max_charge_current_a=100.0,
         max_discharge_current_a=100.0,
@@ -191,7 +196,7 @@ def test_battery_discharge_power_scales_with_quantity_strings():
         deficit_kw=1e9,
         battery_enabled=True,
         quantity_strings=5,
-        nominal_capacity_kwh_per_string=1000.0,
+        effective_capacity_kwh=5000.0,   # 5 strings × 1000 kWh/string
         nominal_voltage_v=600.0,
         max_charge_current_a=100.0,
         max_discharge_current_a=100.0,

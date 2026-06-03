@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+# TYPE_CHECKING guard prevents a circular import:
+#   controller/__init__.py → engine.py → core.simulation.battery_soc
+#   → core/simulation/__init__.py → simulator.py → controller/engine.py
+# Because `from __future__ import annotations` is active, all annotations are
+# lazy strings at runtime — BatteryState is never evaluated, so the import
+# can safely be gated behind TYPE_CHECKING.
+if TYPE_CHECKING:
+    from core.simulation.battery_soc import BatteryState
 
 from .config import DEFAULT_DISPATCH_STRATEGY, validate_dispatch_strategy
 
@@ -10,7 +19,11 @@ def run_controller_step(
     load_kw: float,
     pv_kw: float,
     wind_kw: float,
-    current_battery_soc_pct: float,
+    # Full battery runtime state — replaces the old bare `current_battery_soc_pct: float`.
+    # The simulator initialises this once and carries it step-to-step via
+    # dispatch.updated_battery_state, so adding new per-step battery physics
+    # only requires a new field on BatteryState, not a change here.
+    battery_state: BatteryState,
     battery_config: Any,
     converter_config: Any,
     grid_config: Any,
@@ -28,7 +41,7 @@ def run_controller_step(
             load_kw=load_kw,
             pv_kw=pv_kw,
             wind_kw=wind_kw,
-            current_battery_soc_pct=current_battery_soc_pct,
+            battery_state=battery_state,
             battery_config=battery_config,
             converter_config=converter_config,
             grid_config=grid_config,

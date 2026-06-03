@@ -31,6 +31,16 @@ class HourlySimulationRecord:
     rectifier_loss_kw: float = 0.0
     self_discharge_loss_kwh: float = 0.0
 
+    # Battery health fields — populated from BatteryState after each dispatch step.
+    # effective_capacity_kwh: actual usable capacity after any future capacity fade;
+    #   starts at nominal (n_strings × kWh_per_string) and will shrink year-by-year
+    #   once fade is implemented. Stored per-hour so the results DataFrame captures
+    #   the degradation curve for reporting and NPC calculations.
+    # soh_pct: State of Health as % of original capacity (100 = new, ~80 = EOL Li-Ion).
+    #   Reference: IEC 62619, manufacturer datasheets.
+    effective_capacity_kwh: float = 0.0
+    soh_pct: float = 100.0
+
 
 @dataclass
 class SimulationSummary:

@@ -9,7 +9,7 @@ from core.components.grid import (
 DEFAULT_GRID = GridComponentConfig()
 
 
-def render_grid_component_panel() -> None:
+def render_grid_component_panel(currency_symbol: str = "₹") -> None:
     st.header("🔌 Grid")
 
     st.subheader("Basic Settings")
@@ -26,7 +26,7 @@ def render_grid_component_panel() -> None:
 
     with c1:
         grid_power_price_per_kwh = st.number_input(
-            "Grid Power Price ($/kWh)",
+            f"Grid Power Price ({currency_symbol}/kWh)",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -41,7 +41,7 @@ def render_grid_component_panel() -> None:
 
     with c2:
         grid_sellback_price_per_kwh = st.number_input(
-            "Grid Sellback Price ($/kWh)",
+            f"Grid Sellback Price ({currency_symbol}/kWh)",
             min_value=0.0,
             value=float(
                 st.session_state.get(
