@@ -111,7 +111,17 @@ def apply_capacity_fade(
 
         cycle_fade_pct    = capacity_fade_pct_per_efc × EFC
         calendar_fade_pct = calendar_fade_pct_per_year × elapsed_years
-        soh_pct           = 100 - cycle_fade_pct - calendar_fade_pct
+        soh_pct           = 100 - max(cycle_fade_pct, calendar_fade_pct)
+
+    WHY max() AND NOT ADDITION
+    --------------------------
+    HOMER Pro's rule: "End of life determined by calendar or cycling degradation,
+    whichever is greater."  Adding the two fades would double-count: a battery
+    that reaches EOL via cycling at year 10 and would have reached EOL via calendar
+    at year 12 has NOT suffered 2× degradation — it failed once, at year 10.
+    max() correctly captures "whichever mechanism gets there first."
+    As future steps add Arrhenius calendar aging (temperature-dependent) and
+    Rainflow cycle counting (DoD-dependent), the combining rule stays max().
 
     EFC (Equivalent Full Cycle):
         EFC = cumulative_throughput_kwh / (2 × nominal_capacity_kwh)
@@ -185,12 +195,15 @@ def apply_capacity_fade(
     elapsed_years = elapsed_hours / 8760.0
     calendar_fade_pct = calendar_fade_pct_per_year * elapsed_years
 
-    # ---- Combined SoH — clamped at EOL floor ----
-    # Below end_of_life_soh_pct, the battery is replaced; the model does not
-    # degrade further — replacement cost is handled by the economics evaluator.
+    # ---- Combined SoH — max() rule, then clamped at EOL floor ----
+    # Use max(cycle_fade, calendar_fade) not their sum — matching HOMER Pro's
+    # "EOL by calendar or cycling degradation, whichever is greater."
+    # The EOL floor stops further degradation in the model; replacement economics
+    # are handled separately by the evaluator via lifetime_years / throughput_kwh.
+    dominant_fade_pct = max(cycle_fade_pct, calendar_fade_pct)
     new_soh_pct = max(
         float(end_of_life_soh_pct),
-        min(100.0, 100.0 - cycle_fade_pct - calendar_fade_pct),
+        min(100.0, 100.0 - dominant_fade_pct),
     )
 
     # Scale effective capacity proportionally to SoH.

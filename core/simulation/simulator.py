@@ -61,16 +61,14 @@ class HybridSystemSimulator:
 
         # Initialise mutable battery runtime state once, then carry it step-to-step
         # via dispatch.updated_battery_state.  Using a dataclass rather than a bare
-        # float means future battery features (capacity fade, rainflow counting, etc.)
-        # only need a new field on BatteryState — this initialisation is the only place
-        # that needs to know nominal capacity; the dispatch chain reads effective_capacity_kwh.
+        # float means adding new battery physics only requires a new field on
+        # BatteryState — no signature changes across the dispatch chain.
         battery_enabled = components.battery.enabled and design.battery_quantity > 0
         initial_soc_pct = (
             components.battery.initial_state_of_charge_pct if battery_enabled else 0.0
         )
         # effective_capacity_kwh starts at nominal (n_strings × kWh_per_string).
-        # Once capacity fade is implemented, this will be updated annually as the
-        # battery ages and effective_capacity_kwh shrinks below nominal.
+        # apply_capacity_fade() reduces this each step as cycling accumulates.
         initial_effective_capacity_kwh = (
             components.battery.nominal_capacity_kwh_per_string * design.battery_quantity
             if battery_enabled
@@ -80,6 +78,31 @@ class HybridSystemSimulator:
             soc_pct=initial_soc_pct,
             effective_capacity_kwh=initial_effective_capacity_kwh,
         )
+
+        # Pre-compute capacity fade parameters once before the loop.
+        #
+        # The user inputs replacement_degradation_limit_pct (e.g. 20%) and
+        # throughput_kwh — the same values on any battery datasheet.  We derive
+        # the per-EFC fade rate internally so the user never has to calculate it:
+        #
+        #   EFC_to_EOL            = throughput_kwh / (2 x nominal_kwh_per_string)
+        #   capacity_fade_pct/EFC = replacement_degradation_limit_pct / EFC_to_EOL
+        #
+        # battery_quantity cancels: (throughput × n) / (2 × kWh × n) = throughput / (2 × kWh)
+        # so the fade rate is per-string and design-agnostic.
+        #
+        # eol_soh_pct is the SoH floor passed to apply_capacity_fade():
+        #   eol_soh_pct = 100 - replacement_degradation_limit_pct
+        # e.g. 20% degradation limit → replace at 80% SoH (IEC 62619 Li-Ion standard).
+        _rdl = components.battery.replacement_degradation_limit_pct  # shorthand
+        eol_soh_pct = 100.0 - _rdl
+        nominal_kwh_per_string = components.battery.nominal_capacity_kwh_per_string
+        if battery_enabled and nominal_kwh_per_string > 0.0 and _rdl > 0.0:
+            efc_to_eol = components.battery.throughput_kwh / (2.0 * nominal_kwh_per_string)
+            cycle_fade_pct_per_efc = _rdl / efc_to_eol if efc_to_eol > 0.0 else 0.0
+        else:
+            # Battery disabled, zero throughput, or zero degradation limit → no fade.
+            cycle_fade_pct_per_efc = 0.0
 
         renewable_energy_in_battery_kwh = 0.0
         total_direct_renewable_to_load_kwh = 0.0
@@ -119,11 +142,15 @@ class HybridSystemSimulator:
                 battery_state=battery_state,
                 nominal_capacity_kwh=initial_effective_capacity_kwh,
                 elapsed_hours=(hour_index + 1) * self.inputs.time_step_hours,
-                capacity_fade_pct_per_efc=(
-                    components.battery.capacity_fade_pct_per_equivalent_full_cycle
-                ),
-                calendar_fade_pct_per_year=components.battery.calendar_fade_pct_per_year,
-                end_of_life_soh_pct=components.battery.end_of_life_soh_pct,
+                # Cycle fade rate derived once before the loop from throughput_kwh
+                # and replacement_degradation_limit_pct — not read directly from config.
+                capacity_fade_pct_per_efc=cycle_fade_pct_per_efc,
+                # Calendar aging is handled by the economics evaluator via lifetime_years.
+                # Setting to 0.0 here avoids double-counting with the replacement trigger.
+                # When Arrhenius calendar aging is added (future step), it will be derived
+                # from temperature data and passed here instead.
+                calendar_fade_pct_per_year=0.0,
+                end_of_life_soh_pct=eol_soh_pct,
             )
             dt = self.inputs.time_step_hours
 
