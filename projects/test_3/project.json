@@ -2,7 +2,9 @@
   "meta": {
     "name": "test 3",
     "author": "",
-    "description": ""
+    "description": "",
+    "currency_symbol": "\u20b9",
+    "currency_name": "INR"
   },
   "location": {
     "lat": 20.9042,
@@ -10,10 +12,15 @@
     "timezone": "Asia/Kolkata"
   },
   "economics": {
-    "discount_rate": 8.0,
-    "inflation_rate": 2.0,
+    "nominal_discount_rate_pct": 8.0,
+    "inflation_rate_pct": 2.0,
     "project_lifetime_years": 25,
     "annual_capacity_shortage": 0.0
   },
-  "version": "1.0"
+  "load": {
+    "scaled_annual_energy_kwh": null
+  },
+  "version": "1.0",
+  "simulation_time_step_minutes": 60,
+  "dispatch_strategy": "renewable_first"
 }
