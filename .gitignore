@@ -20,3 +20,12 @@ test_runtime_tmp/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude AI tool memory — personal/tool files, not project code
+.claude/
+
+# Simulation outputs — generated files, re-created by running the simulator
+projects/*/outputs/
+
+# Generated test/load data
+projects/*/load_generation.json
