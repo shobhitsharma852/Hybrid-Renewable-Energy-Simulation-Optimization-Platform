@@ -187,25 +187,214 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
         "Set to 0 to disable capacity fade entirely."
     )
 
-    replacement_degradation_limit_pct = st.number_input(
-        "Replacement Degradation Limit (%)",
-        min_value=0.0,
-        max_value=99.0,
-        value=float(
-            st.session_state.get(
-                "battery_replacement_degradation_limit_pct",
-                DEFAULT_BATTERY.replacement_degradation_limit_pct,
+    cf1, cf2 = st.columns(2)
+
+    with cf1:
+        replacement_degradation_limit_pct = st.number_input(
+            "Replacement Degradation Limit (%)",
+            min_value=0.0,
+            max_value=99.0,
+            value=float(
+                st.session_state.get(
+                    "battery_replacement_degradation_limit_pct",
+                    DEFAULT_BATTERY.replacement_degradation_limit_pct,
+                )
+            ),
+            step=1.0,
+            format="%.1f",
+            help=(
+                "Battery is replaced when it has lost this much of its original capacity. "
+                "20% means replace at 80% State of Health (IEC 62619 standard for Li-Ion). "
+                "Same as HOMER Pro's 'Replacement degradation limit (%)' field."
+            ),
+            key="ui_battery_replacement_degradation_limit_pct",
+        )
+
+    with cf2:
+        calendar_fade_pct_per_year = st.number_input(
+            "Calendar Fade (%/year)",
+            min_value=0.0,
+            max_value=20.0,
+            value=float(
+                st.session_state.get(
+                    "ui_battery_calendar_fade_pct_per_year",
+                    DEFAULT_BATTERY.calendar_fade_pct_per_year,
+                )
+            ),
+            step=0.5,
+            format="%.2f",
+            help=(
+                "Capacity lost per year from time-based (calendar) aging, independent of cycling. "
+                "0 = disabled (replacement handled by Lifetime (years) alone — recommended default). "
+                "Typical: Li-Ion 2–3 %/yr, Lead-acid 3–5 %/yr. "
+                "This rate applies at the Arrhenius reference temperature."
+            ),
+            key="ui_battery_calendar_fade_pct_per_year",
+        )
+
+    if calendar_fade_pct_per_year > 0.0:
+        st.caption(
+            "Arrhenius temperature scaling — scale the calendar fade rate with ambient temperature. "
+            "Requires a 'temperature' column in the resource data. "
+            "Set Activation Energy = 0 to disable (fixed rate regardless of temperature)."
+        )
+        arr1, arr2 = st.columns(2)
+        with arr1:
+            arrhenius_ea_ev = st.number_input(
+                "Activation Energy Ea (eV)",
+                min_value=0.0,
+                max_value=2.0,
+                value=float(
+                    st.session_state.get(
+                        "ui_battery_arrhenius_ea_ev",
+                        DEFAULT_BATTERY.arrhenius_ea_ev,
+                    )
+                ),
+                step=0.05,
+                format="%.3f",
+                help=(
+                    "Arrhenius activation energy (eV). 0 = disabled (fixed rate). "
+                    "Li-Ion NMC/NCA typical: 0.7 eV. LFP typical: 0.6 eV."
+                ),
+                key="ui_battery_arrhenius_ea_ev",
             )
-        ),
-        step=1.0,
-        format="%.1f",
-        help=(
-            "Battery is replaced when it has lost this much of its original capacity. "
-            "20% means replace at 80% State of Health (IEC 62619 standard for Li-Ion). "
-            "Same as HOMER Pro's 'Replacement degradation limit (%)' field."
-        ),
-        key="ui_battery_replacement_degradation_limit_pct",
+        with arr2:
+            temperature_reference_c = st.number_input(
+                "Reference Temperature (°C)",
+                min_value=-40.0,
+                max_value=60.0,
+                value=float(
+                    st.session_state.get(
+                        "ui_battery_temperature_reference_c",
+                        DEFAULT_BATTERY.temperature_reference_c,
+                    )
+                ),
+                step=5.0,
+                format="%.1f",
+                help=(
+                    "Temperature at which the Calendar Fade rate above was measured. "
+                    "Default 25°C (standard lab conditions)."
+                ),
+                key="ui_battery_temperature_reference_c",
+            )
+    else:
+        arrhenius_ea_ev = DEFAULT_BATTERY.arrhenius_ea_ev
+        temperature_reference_c = DEFAULT_BATTERY.temperature_reference_c
+
+    st.subheader("Cycle Life (DoD-Dependent Aging)")
+    st.caption(
+        "Power-law model: N(DoD) = A × DoD^(−beta) cycles to failure. "
+        "Each time the charge direction reverses, one half-cycle is counted using Miner's rule. "
+        "Set Cycle Life A = 0 to disable and use the simpler EFC model (derived from Throughput)."
     )
+
+    cl1, cl2 = st.columns(2)
+
+    with cl1:
+        cycle_life_a = st.number_input(
+            "Cycle Life A (cycles at 100% DoD)",
+            min_value=0.0,
+            value=float(
+                st.session_state.get(
+                    "ui_battery_cycle_life_a",
+                    DEFAULT_BATTERY.cycle_life_a,
+                )
+            ),
+            step=50.0,
+            format="%.0f",
+            help=(
+                "Cycles to failure at 100% depth of discharge. "
+                "HOMER Pro Generic Li-Ion default: 750. "
+                "Set to 0 to disable DoD-dependent aging (use Throughput-based EFC model instead)."
+            ),
+            key="ui_battery_cycle_life_a",
+        )
+
+    with cl2:
+        cycle_life_beta = st.number_input(
+            "Cycle Life Beta (power-law exponent)",
+            min_value=0.1,
+            value=float(
+                st.session_state.get(
+                    "ui_battery_cycle_life_beta",
+                    DEFAULT_BATTERY.cycle_life_beta,
+                )
+            ),
+            step=0.1,
+            format="%.2f",
+            help=(
+                "Exponent in N(DoD) = A × DoD^(−beta). "
+                "Higher beta = steeper penalty for deep cycling. "
+                "HOMER Pro Generic Li-Ion default: 1.3."
+            ),
+            key="ui_battery_cycle_life_beta",
+        )
+
+    st.subheader("Temperature Effects")
+    st.caption(
+        "Scale usable battery capacity with ambient temperature each hour. "
+        "Requires a 'temperature' column in the resource data. "
+        "Uses HOMER Pro's polynomial: Capacity(T) = Capacity × (d0 + d1·T + d2·T²). "
+        "The correction is reversible — it does not permanently degrade the battery."
+    )
+
+    consider_temperature_effects = st.checkbox(
+        "Enable Temperature Capacity Correction",
+        value=st.session_state.get(
+            "ui_battery_consider_temperature_effects",
+            DEFAULT_BATTERY.consider_temperature_effects,
+        ),
+        key="ui_battery_consider_temperature_effects",
+    )
+
+    if consider_temperature_effects:
+        ct1, ct2, ct3 = st.columns(3)
+        with ct1:
+            capacity_temp_d0 = st.number_input(
+                "d0 (constant)",
+                value=float(
+                    st.session_state.get(
+                        "ui_battery_capacity_temp_d0",
+                        DEFAULT_BATTERY.capacity_temp_d0,
+                    )
+                ),
+                step=0.01,
+                format="%.4f",
+                help="Constant term. Li-Ion HOMER default: 0.923 (capacity at 0°C = 92.3% of rated).",
+                key="ui_battery_capacity_temp_d0",
+            )
+        with ct2:
+            capacity_temp_d1 = st.number_input(
+                "d1 (linear, per °C)",
+                value=float(
+                    st.session_state.get(
+                        "ui_battery_capacity_temp_d1",
+                        DEFAULT_BATTERY.capacity_temp_d1,
+                    )
+                ),
+                step=0.0001,
+                format="%.5f",
+                help="Linear coefficient. Li-Ion HOMER default: 0.00345.",
+                key="ui_battery_capacity_temp_d1",
+            )
+        with ct3:
+            capacity_temp_d2 = st.number_input(
+                "d2 (quadratic, per °C²)",
+                value=float(
+                    st.session_state.get(
+                        "ui_battery_capacity_temp_d2",
+                        DEFAULT_BATTERY.capacity_temp_d2,
+                    )
+                ),
+                step=0.000001,
+                format="%.6f",
+                help="Quadratic coefficient. Li-Ion HOMER default: -3.75e-05.",
+                key="ui_battery_capacity_temp_d2",
+            )
+    else:
+        capacity_temp_d0 = DEFAULT_BATTERY.capacity_temp_d0
+        capacity_temp_d1 = DEFAULT_BATTERY.capacity_temp_d1
+        capacity_temp_d2 = DEFAULT_BATTERY.capacity_temp_d2
 
     st.subheader("Cost Settings")
 
@@ -279,6 +468,15 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
                 throughput_kwh=float(throughput_kwh),
                 self_discharge_rate_pct_per_day=float(self_discharge_rate_pct_per_day),
                 replacement_degradation_limit_pct=float(replacement_degradation_limit_pct),
+                calendar_fade_pct_per_year=float(calendar_fade_pct_per_year),
+                arrhenius_ea_ev=float(arrhenius_ea_ev),
+                temperature_reference_c=float(temperature_reference_c),
+                cycle_life_a=float(cycle_life_a),
+                cycle_life_beta=float(cycle_life_beta),
+                consider_temperature_effects=bool(consider_temperature_effects),
+                capacity_temp_d0=float(capacity_temp_d0),
+                capacity_temp_d1=float(capacity_temp_d1),
+                capacity_temp_d2=float(capacity_temp_d2),
                 capital_cost_per_string=float(capital_cost_per_string),
                 replacement_cost_per_string=float(replacement_cost_per_string),
                 om_cost_per_string_per_year=float(om_cost_per_string_per_year),
@@ -312,6 +510,15 @@ def build_battery_component_from_state(
     throughput_kwh: float,
     self_discharge_rate_pct_per_day: float,
     replacement_degradation_limit_pct: float,
+    calendar_fade_pct_per_year: float,
+    arrhenius_ea_ev: float,
+    temperature_reference_c: float,
+    cycle_life_a: float,
+    cycle_life_beta: float,
+    consider_temperature_effects: bool,
+    capacity_temp_d0: float,
+    capacity_temp_d1: float,
+    capacity_temp_d2: float,
     capital_cost_per_string: float,
     replacement_cost_per_string: float,
     om_cost_per_string_per_year: float,
@@ -335,6 +542,15 @@ def build_battery_component_from_state(
         throughput_kwh=float(throughput_kwh),
         self_discharge_rate_pct_per_day=float(self_discharge_rate_pct_per_day),
         replacement_degradation_limit_pct=float(replacement_degradation_limit_pct),
+        calendar_fade_pct_per_year=float(calendar_fade_pct_per_year),
+        arrhenius_ea_ev=float(arrhenius_ea_ev),
+        temperature_reference_c=float(temperature_reference_c),
+        cycle_life_a=float(cycle_life_a),
+        cycle_life_beta=float(cycle_life_beta),
+        consider_temperature_effects=bool(consider_temperature_effects),
+        capacity_temp_d0=float(capacity_temp_d0),
+        capacity_temp_d1=float(capacity_temp_d1),
+        capacity_temp_d2=float(capacity_temp_d2),
         capital_cost_per_string=float(capital_cost_per_string),
         replacement_cost_per_string=float(replacement_cost_per_string),
         om_cost_per_string_per_year=float(om_cost_per_string_per_year),

@@ -80,6 +80,13 @@ class SimulationSummary:
     min_battery_soc_pct: float = 0.0
     max_battery_soc_pct: float = 0.0
 
+    # Battery health at end of simulation year.
+    # final_soh_pct: State of Health (%) of the last hourly record — shows how much
+    #   capacity the battery has lost to all aging mechanisms combined.
+    # min_effective_capacity_kwh: lowest usable capacity seen during the year.
+    final_soh_pct: float = 100.0
+    min_effective_capacity_kwh: float = 0.0
+
 
 @dataclass
 class SimulationResults:

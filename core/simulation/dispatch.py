@@ -645,12 +645,14 @@ def run_dispatch_step(
 
     updated_battery_state = BatteryState(
         soc_pct=battery_soc_pct,
-        # Capacity unchanged this step — will be reduced here once capacity fade
-        # is implemented (a single update: fade_factor × old_effective_capacity).
+        # Capacity unchanged this step — reduced by apply_capacity_fade() in the simulator.
         effective_capacity_kwh=effective_capacity_kwh,
         cumulative_throughput_kwh=new_cumulative_throughput_kwh,
-        # SoH unchanged this step — will be derived from capacity fade later.
+        # SoH and cycle-damage fields are updated in the simulator after dispatch.
         soh_pct=battery_state.soh_pct,
+        cumulative_cycle_damage=battery_state.cumulative_cycle_damage,
+        half_cycle_soc_pct=battery_state.half_cycle_soc_pct,
+        half_cycle_direction=battery_state.half_cycle_direction,
     )
 
     return DispatchResult(

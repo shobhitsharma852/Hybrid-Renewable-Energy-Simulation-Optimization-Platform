@@ -60,6 +60,21 @@ class BatteryState:
     cumulative_throughput_kwh: float = 0.0
     soh_pct: float = 100.0
 
+    # DoD-based cycle damage tracking (Miner's rule).
+    # cumulative_cycle_damage accumulates from 0 (new) toward 1 (EOL by cycling).
+    # At 1.0 the battery has consumed its full cycle life at the DoD it was cycled at.
+    # Only active when BatteryComponentConfig.cycle_life_a > 0.
+    cumulative_cycle_damage: float = 0.0
+
+    # SOC (%) at the start of the current half-cycle (last direction reversal).
+    # -1.0 = tracking not yet started (no charge or discharge has occurred).
+    # On the first active step this is set to the pre-dispatch SOC.
+    half_cycle_soc_pct: float = -1.0
+
+    # Direction of the most recent active half-cycle.
+    # 0 = idle / not yet started, 1 = charging, -1 = discharging.
+    half_cycle_direction: int = 0
+
 
 # ============================================================
 # SECTION 1 — RESULT DATACLASS FOR CHARGE / DISCHARGE STEP
@@ -91,10 +106,10 @@ def apply_capacity_fade(
     *,
     battery_state: BatteryState,
     nominal_capacity_kwh: float,
-    elapsed_hours: float,
-    capacity_fade_pct_per_efc: float,
-    calendar_fade_pct_per_year: float,
     end_of_life_soh_pct: float,
+    capacity_fade_pct_per_efc: float = 0.0,
+    cumulative_calendar_fade_pct: float = 0.0,
+    dod_fade_pct: float = 0.0,
 ) -> BatteryState:
     """
     Apply linear capacity fade to battery_state based on cycling and calendar aging.
@@ -157,13 +172,21 @@ def apply_capacity_fade(
     elapsed_hours : float
         Total simulation hours elapsed so far (used for calendar aging).
         Typically (hour_index + 1) × time_step_hours.
-    capacity_fade_pct_per_efc : float
-        % capacity lost per EFC from cycling.  0.0 = disabled.
-    calendar_fade_pct_per_year : float
-        % capacity lost per year from calendar aging.  0.0 = disabled.
     end_of_life_soh_pct : float
         SoH floor — capacity will not fall below this × nominal.
         Typically 80.0 per IEC 62619:2022.
+    capacity_fade_pct_per_efc : float, optional
+        % capacity lost per EFC (simple EFC model).  0.0 = disabled.
+        Disable when using the DoD model (cycle_life_a > 0) to avoid double-counting.
+    cumulative_calendar_fade_pct : float, optional
+        Total calendar capacity lost (%) accumulated from simulation start.
+        Computed by the simulator — either as rate × elapsed_years (fixed-rate model)
+        or as the Arrhenius-integrated sum (temperature-dependent model).
+        0.0 = calendar aging disabled (default).
+    dod_fade_pct : float, optional
+        Pre-computed fade from DoD-based cycle damage:
+            dod_fade_pct = cumulative_cycle_damage × replacement_degradation_limit_pct
+        0.0 = DoD model disabled (default).  Included in the max() combining rule.
 
     Returns
     -------
@@ -178,29 +201,35 @@ def apply_capacity_fade(
     IEC 62619:2022 — Safety requirements for secondary lithium cells
     Xu et al. (2016) Applied Energy 177:537-545
     """
-    # Fast path: both rates zero means no fade requested — return unchanged.
-    if capacity_fade_pct_per_efc <= 0.0 and calendar_fade_pct_per_year <= 0.0:
+    # Fast path: all fade mechanisms disabled — return unchanged.
+    if capacity_fade_pct_per_efc <= 0.0 and cumulative_calendar_fade_pct <= 0.0 and dod_fade_pct <= 0.0:
         return battery_state
 
     if nominal_capacity_kwh <= 0.0:
         return battery_state
 
-    # ---- Cycle fade ----
+    # ---- Cycle fade (EFC model) ----
     # EFC = total throughput / (2 × nominal capacity).
     # The 2× denominator accounts for both charge and discharge halves of each cycle.
     efc = battery_state.cumulative_throughput_kwh / (2.0 * nominal_capacity_kwh)
     cycle_fade_pct = capacity_fade_pct_per_efc * efc
 
     # ---- Calendar fade ----
-    elapsed_years = elapsed_hours / 8760.0
-    calendar_fade_pct = calendar_fade_pct_per_year * elapsed_years
+    # cumulative_calendar_fade_pct is the total calendar capacity lost (%) from
+    # simulation start, pre-computed by the simulator.  For a fixed rate:
+    #   cumulative = rate × elapsed_years
+    # For Arrhenius (temperature-dependent):
+    #   cumulative = Σ_steps rate(T_i) × dt_i / 8760
+    # Either way, we receive the total here — no elapsed_hours needed.
+    calendar_fade_pct = max(0.0, float(cumulative_calendar_fade_pct))
 
     # ---- Combined SoH — max() rule, then clamped at EOL floor ----
-    # Use max(cycle_fade, calendar_fade) not their sum — matching HOMER Pro's
-    # "EOL by calendar or cycling degradation, whichever is greater."
+    # All three fade mechanisms compete; the most advanced mechanism "wins."
+    # HOMER Pro rule: "EOL by calendar or cycling degradation, whichever is greater."
+    # Adding the three fades would double-count — max() is physically correct.
     # The EOL floor stops further degradation in the model; replacement economics
     # are handled separately by the evaluator via lifetime_years / throughput_kwh.
-    dominant_fade_pct = max(cycle_fade_pct, calendar_fade_pct)
+    dominant_fade_pct = max(cycle_fade_pct, calendar_fade_pct, dod_fade_pct)
     new_soh_pct = max(
         float(end_of_life_soh_pct),
         min(100.0, 100.0 - dominant_fade_pct),
@@ -223,11 +252,255 @@ def apply_capacity_fade(
         effective_capacity_kwh=new_effective_capacity_kwh,
         cumulative_throughput_kwh=battery_state.cumulative_throughput_kwh,
         soh_pct=new_soh_pct,
+        # Cycle damage tracking is not modified by capacity fade — carried through.
+        cumulative_cycle_damage=battery_state.cumulative_cycle_damage,
+        half_cycle_soc_pct=battery_state.half_cycle_soc_pct,
+        half_cycle_direction=battery_state.half_cycle_direction,
     )
 
 
 # ============================================================
-# SECTION 3 — SELF-DISCHARGE
+# SECTION 3 — TEMPERATURE CAPACITY CORRECTION
+# ============================================================
+
+# Boltzmann constant (eV/K) — used for Arrhenius calendar aging scaling.
+_KB_EV_PER_K: float = 8.617333e-5
+
+
+def compute_arrhenius_calendar_rate(
+    *,
+    base_calendar_fade_pct_per_year: float,
+    ambient_temperature_c: float,
+    activation_energy_ev: float,
+    reference_temperature_c: float = 25.0,
+) -> float:
+    """
+    Scale a fixed calendar fade rate by the Arrhenius temperature factor.
+
+    Returns the effective calendar fade rate (%/year) at the given ambient temperature.
+    Multiply by (time_step_hours / 8760) to get the per-step fade contribution.
+
+    FORMULA
+    -------
+    The normalised Arrhenius scaling factor (relative to reference temperature):
+
+        scale(T) = exp( Ea/kB × (1/T_ref_K − 1/T_K) )
+
+    where Ea is activation energy (eV), kB is Boltzmann constant (eV/K).
+
+    This form has a useful property: at T = T_ref the exponent is zero → scale = 1.0,
+    so the base rate is returned unchanged at the reference temperature.
+
+    WHY NORMALISED FORM
+    -------------------
+    HOMER Pro's ASM uses B×exp(−Ea/kBT) with a pre-exponential B whose units depend
+    on the specific aging model (often s^−0.5 for a diffusion-limited fit).  The
+    normalised form avoids requiring the user to know B from a lab-fit — they only
+    need Ea and the rate at their reference temperature.  The two are equivalent if
+    the user sets base_rate = B×exp(−Ea/(kB×T_ref)).
+
+    TYPICAL VALUES
+    --------------
+    Li-Ion NMC/NCA: Ea ≈ 0.7 eV (Schmalstieg et al. 2014, J. Power Sources 309:86-95)
+    LFP:            Ea ≈ 0.6 eV
+    At T_ref = 25°C with Ea = 0.7 eV:
+        T = 35°C → scale ≈ 1.8  (80% faster)
+        T = 45°C → scale ≈ 3.2  (3× faster)
+        T =  0°C → scale ≈ 0.09 (90% slower)
+
+    Parameters
+    ----------
+    base_calendar_fade_pct_per_year : float
+        Nominal calendar fade rate (%/year) at reference_temperature_c.
+    ambient_temperature_c : float
+        Current ambient temperature (°C) from the resource data.
+    activation_energy_ev : float
+        Arrhenius activation energy (eV).
+    reference_temperature_c : float
+        Temperature (°C) at which base_calendar_fade_pct_per_year was measured.
+        Default 25°C (standard lab conditions).
+
+    Returns
+    -------
+    float
+        Effective calendar fade rate (%/year) at ambient_temperature_c.
+    """
+    t_k = ambient_temperature_c + 273.15
+    t_ref_k = reference_temperature_c + 273.15
+
+    # Guard against physically impossible temperatures that could cause division by zero.
+    if t_k <= 0.0 or t_ref_k <= 0.0:
+        return base_calendar_fade_pct_per_year
+
+    exponent = (activation_energy_ev / _KB_EV_PER_K) * (1.0 / t_ref_k - 1.0 / t_k)
+    scale = math.exp(exponent)
+    return base_calendar_fade_pct_per_year * scale
+
+
+def compute_temperature_correction_factor(
+    *,
+    ambient_temperature_c: float,
+    d0: float,
+    d1: float,
+    d2: float,
+) -> float:
+    """
+    Compute the reversible temperature capacity correction factor.
+
+    Formula (HOMER Pro Advanced Storage Model — Temperature Effects):
+        factor = d0 + d1×T + d2×T²
+    where T is ambient temperature in °C.
+
+    The factor is clamped to [0.01, 1.0]:
+    - Cannot exceed 1.0: temperature cannot raise capacity above its rated value.
+    - Cannot go below 0.01: prevents zero/negative capacity at extreme cold.
+
+    HOMER Pro Generic Li-Ion defaults: d0=0.923, d1=0.00345, d2=-3.75e-05.
+
+    Returns
+    -------
+    float
+        Dimensionless correction factor to multiply against effective_capacity_kwh.
+        Apply as: dispatch_capacity = battery_state.effective_capacity_kwh × factor.
+    """
+    t = float(ambient_temperature_c)
+    factor = d0 + d1 * t + d2 * t * t
+    # Clamp: temperature cannot give the battery more than its rated capacity,
+    # and a factor ≤ 0 would make dispatch nonsensical.
+    return max(0.01, min(1.0, factor))
+
+
+# ============================================================
+# SECTION 4 — DOD-BASED CYCLE DAMAGE (MINER'S RULE)
+# ============================================================
+
+def accumulate_cycle_damage(
+    *,
+    battery_state: BatteryState,
+    soc_before_step: float,
+    battery_charge_kw: float,
+    battery_discharge_kw: float,
+    cycle_life_a: float,
+    cycle_life_beta: float,
+) -> BatteryState:
+    """
+    Detect half-cycle completions and accumulate Miner's rule fatigue damage.
+
+    Call this AFTER each dispatch step (when direction of charging/discharging is known)
+    and BEFORE apply_capacity_fade() so that the damage is reflected in the same step.
+
+    HALF-CYCLE MODEL
+    ----------------
+    A "half-cycle" is one continuous charge or discharge run.  A full cycle =
+    one charge + one discharge.  Miner's rule sums fractional damage from each
+    half-cycle; at total damage = 1.0 the battery reaches end of life by cycling.
+
+    When the battery switches from charging to discharging (or vice versa), the
+    just-completed half-cycle is closed:
+        DoD      = |soc_at_reversal − soc_at_start_of_half_cycle| / 100
+        damage   = 0.5 / N(DoD)   where N(DoD) = cycle_life_a × DoD^(−cycle_life_beta)
+        ∴ damage = 0.5 × DoD^cycle_life_beta / cycle_life_a
+
+    A new half-cycle then starts from the reversal point.
+
+    WHY 0.5 AND NOT 1.0
+    --------------------
+    N(DoD) is defined in terms of FULL cycles.  Each direction reversal closes one
+    HALF of a full cycle, so the fractional damage per half-cycle is 0.5 / N(DoD).
+
+    IDLE TIMESTEPS
+    --------------
+    When the battery neither charges nor discharges (idle), the current half-cycle
+    remains open — idle periods are not direction reversals.
+
+    Parameters
+    ----------
+    battery_state : BatteryState
+        State entering this step (contains half_cycle tracking fields).
+    soc_before_step : float
+        SOC (%) at the very start of this timestep (pre-dispatch).
+        Used as the endpoint of a just-completed half-cycle and the start of the new one.
+    battery_charge_kw : float
+        Charge power this step (from DispatchResult).  > 0 means charging.
+    battery_discharge_kw : float
+        Discharge power this step (from DispatchResult).  > 0 means discharging.
+    cycle_life_a : float
+        Cycles to failure at 100% DoD (config param).  Must be > 0.
+    cycle_life_beta : float
+        Power-law exponent (config param).  Must be > 0.
+
+    Returns
+    -------
+    BatteryState with updated cumulative_cycle_damage, half_cycle_soc_pct,
+    half_cycle_direction.  All other fields carried through unchanged.
+    """
+    # Determine this step's direction.
+    if battery_charge_kw > 0.0:
+        current_direction = 1     # charging
+    elif battery_discharge_kw > 0.0:
+        current_direction = -1    # discharging
+    else:
+        current_direction = 0     # idle — no direction change
+
+    prev_direction = battery_state.half_cycle_direction
+    cumulative_damage = battery_state.cumulative_cycle_damage
+    half_cycle_soc = battery_state.half_cycle_soc_pct
+
+    # --- Not yet tracking: first active step ---
+    if half_cycle_soc < 0.0:
+        if current_direction != 0:
+            # Start tracking from the SOC at the beginning of this step.
+            return BatteryState(
+                soc_pct=battery_state.soc_pct,
+                effective_capacity_kwh=battery_state.effective_capacity_kwh,
+                cumulative_throughput_kwh=battery_state.cumulative_throughput_kwh,
+                soh_pct=battery_state.soh_pct,
+                cumulative_cycle_damage=cumulative_damage,
+                half_cycle_soc_pct=soc_before_step,
+                half_cycle_direction=current_direction,
+            )
+        # Still idle — nothing to do.
+        return battery_state
+
+    # --- Direction reversal: close the current half-cycle ---
+    new_damage = cumulative_damage
+    new_half_soc = half_cycle_soc
+    new_direction = prev_direction  # default: keep current
+
+    if (
+        current_direction != 0
+        and prev_direction != 0
+        and current_direction != prev_direction
+    ):
+        # Half-cycle just completed: from half_cycle_soc to soc_before_step.
+        dod = abs(soc_before_step - half_cycle_soc) / 100.0
+        if dod > 1e-6 and cycle_life_a > 0.0:
+            # Miner's rule: damage = 0.5 / N(DoD) = 0.5 × DoD^beta / A.
+            # The minimum DoD guard avoids log(0) and meaningless micro-cycles.
+            half_cycle_damage = 0.5 * (dod ** cycle_life_beta) / cycle_life_a
+            new_damage = cumulative_damage + half_cycle_damage
+
+        # Start the new half-cycle from the reversal point.
+        new_half_soc = soc_before_step
+        new_direction = current_direction
+
+    elif current_direction != 0:
+        # Same direction (or transitioning from idle): keep the half-cycle open.
+        new_direction = current_direction
+
+    return BatteryState(
+        soc_pct=battery_state.soc_pct,
+        effective_capacity_kwh=battery_state.effective_capacity_kwh,
+        cumulative_throughput_kwh=battery_state.cumulative_throughput_kwh,
+        soh_pct=battery_state.soh_pct,
+        cumulative_cycle_damage=new_damage,
+        half_cycle_soc_pct=new_half_soc,
+        half_cycle_direction=new_direction,
+    )
+
+
+# ============================================================
+# SECTION 5 — SELF-DISCHARGE
 # ============================================================
 
 def compute_self_discharge_loss(
@@ -277,7 +550,7 @@ def compute_self_discharge_loss(
 
 
 # ============================================================
-# SECTION 4 — EFFICIENCY HELPERS
+# SECTION 6 — EFFICIENCY HELPERS
 # ============================================================
 
 def _split_roundtrip_efficiency(roundtrip_efficiency_pct: float) -> tuple[float, float]:
@@ -297,7 +570,7 @@ def _split_roundtrip_efficiency(roundtrip_efficiency_pct: float) -> tuple[float,
 
 
 # ============================================================
-# SECTION 5 — CURRENT-BASED POWER LIMIT HELPERS
+# SECTION 7 — CURRENT-BASED POWER LIMIT HELPERS
 # ============================================================
 
 def _compute_charge_power_limit_kw(
@@ -345,7 +618,7 @@ def _compute_discharge_power_limit_kw(
 
 
 # ============================================================
-# SECTION 6 — MAIN BATTERY STEP UPDATE
+# SECTION 8 — MAIN BATTERY STEP UPDATE
 # ============================================================
 
 def update_battery_state(

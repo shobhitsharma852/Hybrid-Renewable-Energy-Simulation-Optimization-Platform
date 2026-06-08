@@ -12,7 +12,13 @@ from core.controller.config import (
 )
 from core.controller.engine import run_controller_step
 from core.optimization.design_point import DesignPoint
-from .battery_soc import BatteryState, apply_capacity_fade
+from .battery_soc import (
+    BatteryState,
+    accumulate_cycle_damage,
+    apply_capacity_fade,
+    compute_arrhenius_calendar_rate,
+    compute_temperature_correction_factor,
+)
 from .pv_model import compute_pv_power_from_resource_row
 from .results import (
     HourlySimulationRecord,
@@ -97,12 +103,40 @@ class HybridSystemSimulator:
         _rdl = components.battery.replacement_degradation_limit_pct  # shorthand
         eol_soh_pct = 100.0 - _rdl
         nominal_kwh_per_string = components.battery.nominal_capacity_kwh_per_string
-        if battery_enabled and nominal_kwh_per_string > 0.0 and _rdl > 0.0:
+
+        # DoD model (Miner's rule) is active when cycle_life_a > 0.
+        # When active it REPLACES the EFC model to avoid double-counting —
+        # both models use replacement_degradation_limit_pct as the EOL definition,
+        # so enabling both would advance SoH twice as fast for the same cycling.
+        use_dod_model = (
+            battery_enabled
+            and components.battery.cycle_life_a > 0.0
+            and components.battery.cycle_life_beta > 0.0
+        )
+
+        if use_dod_model:
+            # DoD model handles cycle aging — disable EFC fade.
+            cycle_fade_pct_per_efc = 0.0
+        elif battery_enabled and nominal_kwh_per_string > 0.0 and _rdl > 0.0:
             efc_to_eol = components.battery.throughput_kwh / (2.0 * nominal_kwh_per_string)
             cycle_fade_pct_per_efc = _rdl / efc_to_eol if efc_to_eol > 0.0 else 0.0
         else:
             # Battery disabled, zero throughput, or zero degradation limit → no fade.
             cycle_fade_pct_per_efc = 0.0
+
+        # Arrhenius calendar aging: temperature-dependent calendar fade rate.
+        # Active when arrhenius_ea_ev > 0 and temperature data exists.
+        # Accumulates per-step contributions: Σ rate(T_i) × dt_i / 8760.
+        # When disabled, calendar fade is fixed: rate × elapsed_years (computed per step).
+        dt = self.inputs.time_step_hours
+        has_temperature_column = "temperature" in resource_df.columns
+        use_arrhenius = (
+            battery_enabled
+            and components.battery.arrhenius_ea_ev > 0.0
+            and components.battery.calendar_fade_pct_per_year > 0.0
+            and has_temperature_column
+        )
+        cumulative_arrhenius_calendar_pct = 0.0  # running sum for Arrhenius path
 
         renewable_energy_in_battery_kwh = 0.0
         total_direct_renewable_to_load_kwh = 0.0
@@ -113,6 +147,50 @@ class HybridSystemSimulator:
             pv_kw = self._get_pv_kw(resource_df, hour_index, components)
             wind_kw = self._get_wind_kw(resource_df, hour_index, components)
 
+            # Save SOC before dispatch — needed for half-cycle direction-reversal detection.
+            pre_dispatch_soc_pct = battery_state.soc_pct
+
+            # Read ambient temperature once per step if any thermal feature needs it.
+            # Shared by: temperature capacity correction and Arrhenius calendar aging.
+            if has_temperature_column and (
+                (battery_enabled and components.battery.consider_temperature_effects)
+                or use_arrhenius
+            ):
+                hour_temp_c: float | None = float(resource_df.iloc[hour_index]["temperature"])
+            else:
+                hour_temp_c = None
+
+            # Temperature capacity correction (Step 2 of HOMER Pro ASM aging model).
+            # This is REVERSIBLE — it adjusts the usable capacity for this hour only.
+            # battery_state.effective_capacity_kwh always holds the fade-degraded (permanent)
+            # capacity at standard conditions; temp_factor scales it for the current hour.
+            if (
+                battery_enabled
+                and components.battery.consider_temperature_effects
+                and hour_temp_c is not None
+            ):
+                temp_factor = compute_temperature_correction_factor(
+                    ambient_temperature_c=hour_temp_c,
+                    d0=components.battery.capacity_temp_d0,
+                    d1=components.battery.capacity_temp_d1,
+                    d2=components.battery.capacity_temp_d2,
+                )
+                # Create a temporary BatteryState with temperature-adjusted capacity
+                # for this dispatch step.  The SOC% is unchanged — same stored energy,
+                # different frame of reference (smaller capacity → same kWh / larger pct).
+                dispatch_battery_state = BatteryState(
+                    soc_pct=battery_state.soc_pct,
+                    effective_capacity_kwh=battery_state.effective_capacity_kwh * temp_factor,
+                    cumulative_throughput_kwh=battery_state.cumulative_throughput_kwh,
+                    soh_pct=battery_state.soh_pct,
+                    cumulative_cycle_damage=battery_state.cumulative_cycle_damage,
+                    half_cycle_soc_pct=battery_state.half_cycle_soc_pct,
+                    half_cycle_direction=battery_state.half_cycle_direction,
+                )
+            else:
+                temp_factor = 1.0
+                dispatch_battery_state = battery_state
+
             dispatch = run_controller_step(
                 load_kw=load_kw,
                 pv_kw=pv_kw,
@@ -120,7 +198,7 @@ class HybridSystemSimulator:
                 # Pass the full BatteryState object instead of a bare SOC float.
                 # dispatch.updated_battery_state carries the new SOC, cumulative throughput,
                 # and any other per-step state back out to the next iteration.
-                battery_state=battery_state,
+                battery_state=dispatch_battery_state,
                 battery_config=components.battery,
                 converter_config=components.converter,
                 grid_config=components.grid,
@@ -130,27 +208,75 @@ class HybridSystemSimulator:
                 dispatch_strategy=dispatch_strategy,
             )
 
-            # Step 1: carry dispatch-updated state (new SOC, throughput) forward.
-            battery_state = dispatch.updated_battery_state
+            # Step 1: restore fade-only capacity (strip temperature correction).
+            # Dispatch computed SOC% against temp-adjusted capacity; convert back to
+            # the fade-only (permanent) capacity basis so apply_capacity_fade can use
+            # the correct nominal reference.
+            # Math: stored_kwh = post.soc × temp_cap / 100 = post.soc × fade_cap × temp_factor / 100
+            #        → restored_soc = stored_kwh / fade_cap × 100 = post.soc × temp_factor
+            post_dispatch = dispatch.updated_battery_state
+            battery_state = BatteryState(
+                soc_pct=min(100.0, post_dispatch.soc_pct * temp_factor),
+                effective_capacity_kwh=battery_state.effective_capacity_kwh,
+                cumulative_throughput_kwh=post_dispatch.cumulative_throughput_kwh,
+                soh_pct=battery_state.soh_pct,
+                # Carry cycle damage tracking fields; accumulate_cycle_damage() updates them next.
+                cumulative_cycle_damage=battery_state.cumulative_cycle_damage,
+                half_cycle_soc_pct=battery_state.half_cycle_soc_pct,
+                half_cycle_direction=battery_state.half_cycle_direction,
+            )
 
-            # Step 2: apply capacity fade based on accumulated throughput and
-            # elapsed time.  Fade is applied AFTER throughput is updated so that
-            # the degradation from the current step is reflected immediately.
-            # elapsed_hours uses (hour_index + 1) so the first step = 1 × dt,
-            # not 0 — avoids a zero-calendar-aging edge case at step 0.
+            # Step 2a: accumulate DoD-based cycle damage (Miner's rule half-cycle tracking).
+            # Only runs when cycle_life_a > 0 — otherwise fast-path skipped in battery_soc.
+            # Detects direction reversals using the pre-dispatch SOC as the half-cycle endpoint.
+            if use_dod_model:
+                battery_state = accumulate_cycle_damage(
+                    battery_state=battery_state,
+                    soc_before_step=pre_dispatch_soc_pct,
+                    battery_charge_kw=dispatch.battery_charge_kw,
+                    battery_discharge_kw=dispatch.battery_discharge_kw,
+                    cycle_life_a=components.battery.cycle_life_a,
+                    cycle_life_beta=components.battery.cycle_life_beta,
+                )
+
+            # Step 2b: apply capacity fade.
+            # Fade is applied AFTER throughput is updated so the current step's
+            # cycling damage is reflected immediately.
+
+            # --- Calendar fade accumulation ---
+            # Arrhenius path: scale the base rate by exp(Ea/kB × (1/T_ref − 1/T)) each step.
+            # Fixed-rate path: rate × elapsed_years (computed fresh each step from hour_index).
+            if use_arrhenius and hour_temp_c is not None:
+                step_rate = compute_arrhenius_calendar_rate(
+                    base_calendar_fade_pct_per_year=components.battery.calendar_fade_pct_per_year,
+                    ambient_temperature_c=hour_temp_c,
+                    activation_energy_ev=components.battery.arrhenius_ea_ev,
+                    reference_temperature_c=components.battery.temperature_reference_c,
+                )
+                cumulative_arrhenius_calendar_pct += step_rate * dt / 8760.0
+                cumulative_calendar_fade_pct = cumulative_arrhenius_calendar_pct
+            else:
+                elapsed_years = (hour_index + 1) * dt / 8760.0
+                cumulative_calendar_fade_pct = (
+                    components.battery.calendar_fade_pct_per_year * elapsed_years
+                )
+
+            dod_fade_pct = (
+                battery_state.cumulative_cycle_damage * _rdl
+                if use_dod_model else 0.0
+            )
             battery_state = apply_capacity_fade(
                 battery_state=battery_state,
                 nominal_capacity_kwh=initial_effective_capacity_kwh,
-                elapsed_hours=(hour_index + 1) * self.inputs.time_step_hours,
-                # Cycle fade rate derived once before the loop from throughput_kwh
-                # and replacement_degradation_limit_pct — not read directly from config.
-                capacity_fade_pct_per_efc=cycle_fade_pct_per_efc,
-                # Calendar aging is handled by the economics evaluator via lifetime_years.
-                # Setting to 0.0 here avoids double-counting with the replacement trigger.
-                # When Arrhenius calendar aging is added (future step), it will be derived
-                # from temperature data and passed here instead.
-                calendar_fade_pct_per_year=0.0,
                 end_of_life_soh_pct=eol_soh_pct,
+                # EFC cycle fade rate (0.0 when DoD model is active — they're alternatives).
+                capacity_fade_pct_per_efc=cycle_fade_pct_per_efc,
+                # Calendar fade total (accumulated from simulation start).
+                # Arrhenius: integrates rate(T) × dt over all past steps.
+                # Fixed rate: rate × elapsed_years.
+                cumulative_calendar_fade_pct=cumulative_calendar_fade_pct,
+                # DoD-weighted cycle damage mapped to % fade via replacement_degradation_limit_pct.
+                dod_fade_pct=dod_fade_pct,
             )
             dt = self.inputs.time_step_hours
 
@@ -364,6 +490,14 @@ class HybridSystemSimulator:
             summary.final_battery_soc_pct = battery_soc_values[-1]
             summary.min_battery_soc_pct = min(battery_soc_values)
             summary.max_battery_soc_pct = max(battery_soc_values)
+
+            # Battery health — populated from HourlySimulationRecord fields written by
+            # apply_capacity_fade() each step.  Useful for multi-year projects to show
+            # how much calendar and cycling degradation occurred over the simulated period.
+            soh_values = [float(r.soh_pct) for r in hourly_records]
+            cap_values = [float(r.effective_capacity_kwh) for r in hourly_records]
+            summary.final_soh_pct = soh_values[-1]
+            summary.min_effective_capacity_kwh = min(cap_values)
 
         gross_renewable_generation_kwh = (
             summary.total_pv_generation_kwh + summary.total_wind_generation_kwh

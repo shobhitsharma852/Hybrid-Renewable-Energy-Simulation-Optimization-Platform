@@ -128,6 +128,104 @@ class BatteryComponentConfig:
     #             Schmalstieg et al. (2014) J. Power Sources 309:86-95.
     replacement_degradation_limit_pct: float = 20.0
 
+    # Calendar fade rate: % of original capacity lost per year from time-based aging,
+    # independent of cycling.  0.0 = disabled (replacement economics handled by
+    # lifetime_years alone — the default and recommended setting for most projects).
+    #
+    # When set > 0, the simulator applies this fade every step via the max() rule:
+    #     soh = 100 − max(cycle_fade, calendar_fade, dod_fade)
+    # so calendar and cycle aging compete rather than accumulate.
+    #
+    # This is the rate at the REFERENCE temperature (temperature_reference_c, default 25°C).
+    # When arrhenius_ea_ev > 0, the actual per-step rate is scaled by the Arrhenius factor
+    # so hotter climates degrade the battery faster.
+    #
+    # Typical values: Li-Ion ≈ 2–3 %/year, Lead-acid ≈ 3–5 %/year.
+    # Reference: Pelletier et al. (2017) J. Power Sources 359:468-479.
+    calendar_fade_pct_per_year: float = 0.0
+
+    # Arrhenius activation energy (eV) for temperature-dependent calendar aging.
+    # 0.0 = disabled: calendar_fade_pct_per_year is applied as a fixed rate (no
+    # temperature dependence).
+    #
+    # When > 0 and a "temperature" column is present in the resource data, the
+    # per-step calendar fade rate is scaled by the Arrhenius factor:
+    #
+    #   scale(T) = exp( Ea/kB × (1/T_ref_K − 1/T_K) )
+    #
+    # so a battery at T > T_ref ages faster, and at T < T_ref ages slower.
+    # At T = temperature_reference_c: scale = 1.0 (same as fixed rate).
+    #
+    # Typical values: Li-Ion NMC/NCA ≈ 0.7 eV, LFP ≈ 0.6 eV.
+    # Reference: Schmalstieg et al. (2014) J. Power Sources 309:86-95.
+    arrhenius_ea_ev: float = 0.0
+
+    # Reference temperature (°C) at which calendar_fade_pct_per_year is specified.
+    # Only used when arrhenius_ea_ev > 0.  Default 25°C matches standard lab conditions.
+    temperature_reference_c: float = 25.0
+
+    # --------------------------------------------------------
+    # CYCLE LIFE PARAMETERS  (DoD-dependent aging — HOMER Pro ASM "Cycle Life")
+    # --------------------------------------------------------
+    # Power-law model: N(DoD) = A × DoD^(-beta)
+    # where N(DoD) = number of full cycles to failure at depth-of-discharge DoD.
+    #
+    # Damage per half-cycle (Miner's rule):
+    #     damage = 0.5 / N(DoD) = 0.5 × DoD^beta / A
+    # Cumulative damage sums these each time the charge direction reverses.
+    # At cumulative damage ≥ 1.0 the battery has reached end of life by cycling.
+    #
+    # Relationship to replacement_degradation_limit_pct:
+    #     cumulative_damage = 1.0 → capacity has lost replacement_degradation_limit_pct %
+    # So the DoD model and EFC model share the same EOL definition.
+    #
+    # HOMER Pro Generic Li-Ion defaults: A = 750, beta = 1.3.
+    # Set cycle_life_a = 0 to disable the DoD model and fall back to the simpler
+    # EFC model derived from throughput_kwh (no per-cycle DoD tracking).
+    #
+    # References:
+    #   HOMER Pro Help → Advanced Storage Battery Model → Cycle Life.
+    #   Lam & Bauer (2013) IEEE Trans. Power Electron. 28(12):5603-5613.
+    cycle_life_a: float = 0.0     # Cycles to failure at 100% DoD; 0 = disabled (use EFC model)
+    cycle_life_beta: float = 1.3  # Power-law exponent; only used when cycle_life_a > 0
+
+    # --------------------------------------------------------
+    # TEMPERATURE EFFECTS
+    # --------------------------------------------------------
+    # Whether to apply the temperature-based capacity correction each timestep.
+    # When False, capacity is unaffected by ambient temperature (fast path).
+    # When True, the usable capacity for each hour is scaled by the polynomial:
+    #     Capacity(T) = Capacity × (d0 + d1×T + d2×T²)
+    # where T is the ambient temperature in °C from the resource file.
+    #
+    # This is a REVERSIBLE correction — it adjusts dispatch capacity in real time
+    # but does NOT permanently degrade the battery.  SoH and throughput tracking
+    # are unaffected.
+    #
+    # Requires a "temperature" column in the resource DataFrame.
+    # If the column is missing and this flag is True, the simulator skips the
+    # correction silently (safe fallback to standard capacity).
+    #
+    # Reference: HOMER Pro Advanced Storage Model — Temperature Effects section.
+    consider_temperature_effects: bool = False
+
+    # Polynomial coefficients for the temperature capacity correction.
+    # HOMER Pro defaults for Generic Li-Ion (from the ASM Temperature Effects panel):
+    #   d0 = 0.923     — constant: capacity at 0°C is 92.3% of rated
+    #   d1 = 0.00345   — linear:   capacity rises ~0.35%/°C above 0°C
+    #   d2 = -3.75e-05 — quadratic: flattens/reduces correction at high temperatures
+    #
+    # Worked examples at standard temperatures:
+    #   T =  0°C → factor = 0.923 + 0       + 0       = 0.923  (92.3% of rated)
+    #   T = 25°C → factor = 0.923 + 0.08625 − 0.02344 ≈ 0.9858 (98.6% — NOTE: HOMER
+    #              calibrates the polynomial so that factor peaks near 25–35°C; at
+    #              exactly 25°C the result is still slightly below 1.0, so the factor
+    #              will be clamped to 1.0 if it ever exceeds it)
+    #   T = 45°C → factor = 0.923 + 0.15525 − 0.07594 ≈ 1.002  → clamped to 1.0
+    capacity_temp_d0: float = 0.923
+    capacity_temp_d1: float = 0.00345
+    capacity_temp_d2: float = -3.75e-05
+
     # --------------------------------------------------------
     # ECONOMIC PARAMETERS
     # --------------------------------------------------------
@@ -230,6 +328,27 @@ def validate_battery_component(battery: BatteryComponentConfig) -> None:
     if not (0.0 <= battery.replacement_degradation_limit_pct < 100.0):
         raise ValueError(
             "Battery replacement_degradation_limit_pct must be >= 0 and < 100"
+        )
+
+    if battery.calendar_fade_pct_per_year < 0.0:
+        raise ValueError("Battery calendar_fade_pct_per_year cannot be negative")
+
+    if battery.arrhenius_ea_ev < 0.0:
+        raise ValueError("Battery arrhenius_ea_ev cannot be negative")
+
+    if battery.arrhenius_ea_ev > 0.0 and battery.calendar_fade_pct_per_year <= 0.0:
+        raise ValueError(
+            "Battery calendar_fade_pct_per_year must be > 0 when arrhenius_ea_ev > 0 "
+            "(Arrhenius scales a base rate — there is nothing to scale if the rate is zero)"
+        )
+
+    # cycle_life_a = 0 means DoD model is disabled — valid. If > 0, beta must also be > 0.
+    if battery.cycle_life_a < 0.0:
+        raise ValueError("Battery cycle_life_a cannot be negative")
+
+    if battery.cycle_life_a > 0.0 and battery.cycle_life_beta <= 0.0:
+        raise ValueError(
+            "Battery cycle_life_beta must be > 0 when cycle_life_a > 0"
         )
 
     # --------------------------------------------------------
