@@ -550,10 +550,14 @@ def evaluate_candidate_economics(
     annualized_total_cost = net_present_cost * crf
 
     # --- LCOE ---
-    total_served_load_kwh = max(0.0, float(summary.total_served_load_kwh))
+    # Denominator = served load + grid export (matches HOMER Pro's COE formula:
+    # COE = annualized_cost / (E_served + E_grid_sales)).
+    total_served_load_kwh   = max(0.0, float(summary.total_served_load_kwh))
+    total_grid_export_kwh   = max(0.0, float(getattr(summary, "total_grid_export_kwh", 0.0)))
+    lcoe_denominator_kwh    = total_served_load_kwh + total_grid_export_kwh
     levelized_cost_of_energy = (
-        annualized_total_cost / total_served_load_kwh
-        if total_served_load_kwh > EPSILON
+        annualized_total_cost / lcoe_denominator_kwh
+        if lcoe_denominator_kwh > EPSILON
         else 0.0
     )
 

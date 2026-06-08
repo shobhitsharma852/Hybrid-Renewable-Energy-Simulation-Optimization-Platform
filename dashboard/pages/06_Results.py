@@ -7,7 +7,6 @@ import pandas as pd
 import streamlit as st
 
 from core.components.config import load_components
-from core.simulation.run_project_simulation import run_project_simulation
 from dashboard.ui.state import get_state
 
 
@@ -118,6 +117,8 @@ def _prepare_chart_df(hourly_df: pd.DataFrame) -> pd.DataFrame:
         "grid_export_kw",
         "unmet_load_kw",
         "excess_energy_kw",
+        "soh_pct",
+        "effective_capacity_kwh",
     ]
 
     for col in numeric_cols:
@@ -201,7 +202,10 @@ def build_system_architecture_lines(project_name: str) -> list[str]:
 # TITLE
 # ============================================================
 st.title("Simulation Results")
-st.caption("Run a saved project simulation and review hourly outputs, summary metrics, and charts.")
+st.caption(
+    "Shows the detailed output of the candidate sent from the Optimization page. "
+    "Go to Optimization, select a candidate, and click 'Send Selected Candidate to Results'."
+)
 
 projects = _list_projects()
 
@@ -217,54 +221,43 @@ selected_project = st.selectbox(
     index=default_project_index,
 )
 
-col_run, col_saved = st.columns([1, 1])
+col_refresh, col_info = st.columns([1, 2])
 
-with col_run:
-    run_now = st.button("Run Simulation", use_container_width=True)
+with col_refresh:
+    load_saved = st.button("Refresh Results", use_container_width=True)
 
-with col_saved:
-    load_saved = st.button("Load Saved Outputs", use_container_width=True)
+with col_info:
+    st.info(
+        "To update results: go to **Optimization** page → select a candidate → "
+        "click **Send Selected Candidate to Results**."
+    )
 
 hourly_df: pd.DataFrame | None = None
 summary_dict: dict | None = None
-run_status = None
 
 # ============================================================
-# RUN / LOAD
+# LOAD SAVED OUTPUTS ONLY
+# Results always reads from files saved by the Optimization page.
+# Running simulation with the raw max-search-space design is intentionally
+# removed — use Optimization -> Send to Results for correct candidate output.
 # ============================================================
-if run_now:
-    with st.spinner(f"Running simulation for project: {selected_project}"):
-        results = run_project_simulation(
-            project_name=selected_project,
-            save_outputs=True,
-        )
-        hourly_df = results.to_dataframe()
-        summary_dict = results.summary.__dict__
-        run_status = "fresh"
-
-elif load_saved:
-    hourly_df, summary_dict = _load_saved_outputs(selected_project)
-    run_status = "saved"
-
-else:
-    hourly_df, summary_dict = _load_saved_outputs(selected_project)
-    run_status = "auto-saved"
+hourly_df, summary_dict = _load_saved_outputs(selected_project)
 
 if hourly_df is None or summary_dict is None:
-    st.info("No saved outputs found yet. Click 'Run Simulation' to generate results.")
+    st.warning(
+        "No simulation outputs found for this project yet.  \n"
+        "**Steps to generate results:**  \n"
+        "1. Go to the **Optimization** page  \n"
+        "2. Run the optimization sweep  \n"
+        "3. Select a candidate from the ranked table  \n"
+        "4. Click **Send Selected Candidate to Results**  \n"
+        "Then come back here to view the detailed output."
+    )
     st.stop()
 
 hourly_df = _prepare_chart_df(hourly_df)
 
-# ============================================================
-# STATUS
-# ============================================================
-if run_status == "fresh":
-    st.success("Simulation completed and outputs saved.")
-elif run_status == "saved":
-    st.success("Loaded saved simulation outputs.")
-elif run_status == "auto-saved":
-    st.info("Showing latest saved outputs.")
+st.success("Showing results for the last candidate sent from the Optimization page.")
 
 # ============================================================
 # SYSTEM ARCHITECTURE
@@ -290,18 +283,28 @@ with st.expander("Output Files", expanded=False):
 # ============================================================
 st.subheader("Key Metrics")
 
-m1, m2, m3, m4 = st.columns(4)
-m5, m6, m7, m8 = st.columns(4)
+m1, m2, m3, m4, m5 = st.columns(5)
+m6, m7, m8, m9 = st.columns(4)
 
-m1.metric("Total Load (kWh)", f"{_safe_metric(summary_dict, 'total_load_kwh'):,.2f}")
+# Net RF = renewable energy served to load / total load (our primary calculation)
+net_rf  = _safe_metric(summary_dict, "renewable_fraction")
+# Gross RF = renewable generation / (renewable + grid import) — matches HOMER Pro display
+pv_kwh  = _safe_metric(summary_dict, "total_pv_generation_kwh")
+wind_kwh= _safe_metric(summary_dict, "total_wind_generation_kwh")
+grid_imp= _safe_metric(summary_dict, "total_grid_import_kwh")
+total_gen = pv_kwh + wind_kwh + grid_imp
+gross_rf = (pv_kwh + wind_kwh) / total_gen if total_gen > 0 else 0.0
+
+m1.metric("Total Load (kWh)",  f"{_safe_metric(summary_dict, 'total_load_kwh'):,.2f}")
 m2.metric("Served Load (kWh)", f"{_safe_metric(summary_dict, 'total_served_load_kwh'):,.2f}")
-m3.metric("Unmet Load (kWh)", f"{_safe_metric(summary_dict, 'total_unmet_load_kwh'):,.2f}")
-m4.metric("Renewable Fraction", f"{_safe_metric(summary_dict, 'renewable_fraction'):.3f}")
+m3.metric("Unmet Load (kWh)",  f"{_safe_metric(summary_dict, 'total_unmet_load_kwh'):,.2f}")
+m4.metric("Net RF",  f"{net_rf:.1%}",  help="Renewable energy directly served to load / total load")
+m5.metric("Gross RF (HOMER)", f"{gross_rf:.1%}", help="Renewable generation / (renewable + grid import) — matches HOMER Pro's Renewable Fraction display")
 
-m5.metric("PV Generation (kWh)", f"{_safe_metric(summary_dict, 'total_pv_generation_kwh'):,.2f}")
-m6.metric("Wind Generation (kWh)", f"{_safe_metric(summary_dict, 'total_wind_generation_kwh'):,.2f}")
-m7.metric("Grid Import (kWh)", f"{_safe_metric(summary_dict, 'total_grid_import_kwh'):,.2f}")
-m8.metric("Grid Export (kWh)", f"{_safe_metric(summary_dict, 'total_grid_export_kwh'):,.2f}")
+m6.metric("PV Generation (kWh)",   f"{_safe_metric(summary_dict, 'total_pv_generation_kwh'):,.2f}")
+m7.metric("Wind Generation (kWh)", f"{_safe_metric(summary_dict, 'total_wind_generation_kwh'):,.2f}")
+m8.metric("Grid Import (kWh)",     f"{_safe_metric(summary_dict, 'total_grid_import_kwh'):,.2f}")
+m9.metric("Grid Export (kWh)",     f"{_safe_metric(summary_dict, 'total_grid_export_kwh'):,.2f}")
 
 m9, m10, m11, m12 = st.columns(4)
 m9.metric("Battery Charge (kWh)", f"{_safe_metric(summary_dict, 'total_battery_charge_kwh'):,.2f}")
@@ -309,18 +312,41 @@ m10.metric("Battery Discharge (kWh)", f"{_safe_metric(summary_dict, 'total_batte
 m11.metric("Inverter Loss (kWh)", f"{_safe_metric(summary_dict, 'total_inverter_loss_kwh'):,.2f}")
 m12.metric("Rectifier Loss (kWh)", f"{_safe_metric(summary_dict, 'total_rectifier_loss_kwh'):,.2f}")
 
+m13, m14, m15, m16 = st.columns(4)
+m13.metric(
+    "Final State of Health (%)",
+    f"{_safe_metric(summary_dict, 'final_soh_pct', default=100.0):.2f}",
+    help="Battery SoH at the end of the simulation year. 100% = no degradation.",
+)
+m14.metric(
+    "Min Capacity (kWh)",
+    f"{_safe_metric(summary_dict, 'min_effective_capacity_kwh'):,.2f}",
+    help="Lowest effective capacity seen during the year after all aging.",
+)
+m15.metric(
+    "Total Throughput (kWh)",
+    f"{_safe_metric(summary_dict, 'total_battery_throughput_kwh'):,.2f}",
+    help="Total energy cycled through the battery (charge + discharge halves).",
+)
+m16.metric(
+    "Self-discharge Loss (kWh)",
+    f"{_safe_metric(summary_dict, 'total_self_discharge_loss_kwh'):,.2f}",
+    help="Energy lost passively to self-discharge over the year.",
+)
+
 # ============================================================
 # CHARTS
 # ============================================================
 st.subheader("Charts")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     [
         "Load vs Served",
         "PV & Wind",
         "Battery",
         "Grid",
         "Unmet / Excess",
+        "Battery Health",
     ]
 )
 
@@ -358,3 +384,42 @@ with tab5:
         st.line_chart(chart_df)
     else:
         st.warning("Required columns for unmet/excess chart not found.")
+
+with tab6:
+    has_health_data = (
+        "soh_pct" in hourly_df.columns
+        and "effective_capacity_kwh" in hourly_df.columns
+    )
+
+    if not has_health_data:
+        st.info(
+            "Battery health columns (soh_pct, effective_capacity_kwh) are not present "
+            "in the saved outputs. Re-run the simulation to generate them."
+        )
+    else:
+        st.caption(
+            "State of Health (SoH) and effective capacity over the simulation year. "
+            "A flat line at 100% / nominal capacity means aging was disabled or negligible. "
+            "Enable Replacement Degradation Limit, Cycle Life A, or Calendar Fade in the "
+            "Components panel to see degradation."
+        )
+
+        soh_chart = _chart_frame(hourly_df, ["soh_pct"])
+        if soh_chart is not None:
+            st.subheader("State of Health (%)")
+            st.line_chart(soh_chart)
+
+        cap_chart = _chart_frame(hourly_df, ["effective_capacity_kwh"])
+        if cap_chart is not None:
+            st.subheader("Effective Capacity (kWh)")
+            st.line_chart(cap_chart)
+
+        # Show min/final summary inline so the numbers are visible alongside the chart.
+        final_soh = _safe_metric(summary_dict, "final_soh_pct", default=100.0)
+        min_cap = _safe_metric(summary_dict, "min_effective_capacity_kwh")
+        throughput = _safe_metric(summary_dict, "total_battery_throughput_kwh")
+
+        hc1, hc2, hc3 = st.columns(3)
+        hc1.metric("Final SoH (%)", f"{final_soh:.2f}")
+        hc2.metric("Min Capacity (kWh)", f"{min_cap:,.2f}")
+        hc3.metric("Total Throughput (kWh)", f"{throughput:,.2f}")
