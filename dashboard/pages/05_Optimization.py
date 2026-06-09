@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-from dashboard.ui.layout import top_bar
-from dashboard.ui.sidebar import render_left_panel
+from core.components.config import load_components
+from core.economics.evaluator import (
+    build_default_economic_assumptions_for_project,
+    evaluate_candidate_economics,
+)
 from core.optimization.design_point import DesignPoint
 from core.optimization.optimizer import run_optimization_sweep
 from core.project import load_project
 from core.simulation.run_project_simulation import run_project_simulation
+from dashboard.ui.layout import top_bar
+from dashboard.ui.sidebar import render_left_panel
 
 
 st.set_page_config(
@@ -393,16 +399,58 @@ st.caption(
 if st.button("Send Selected Candidate to Results", type="primary", use_container_width=True):
     design = _build_design_point_from_row(selected_row)
 
-    with st.spinner("Running detailed simulation for selected candidate..."):
-        run_project_simulation(
+    with st.spinner("Running detailed simulation and computing economics..."):
+        sim_results = run_project_simulation(
             project_name=selected_project,
             save_outputs=True,
             design=design,
         )
 
+        # Compute full economics for this candidate and save alongside simulation outputs
+        try:
+            components   = load_components(Path("projects") / selected_project)
+            assumptions  = build_default_economic_assumptions_for_project(
+                selected_project, components
+            )
+            econ = evaluate_candidate_economics(
+                project_name=selected_project,
+                components=components,
+                design=design,
+                simulation_results=sim_results,
+                assumptions=assumptions,
+            )
+
+            # Resolve currency symbol from project metadata
+            try:
+                currency_sym = load_project(Path("projects") / selected_project).meta.currency_symbol
+            except Exception:
+                currency_sym = "$"
+
+            econ_payload = {
+                "currency_symbol":     currency_sym,
+                "project_life_years":  assumptions.project_life_years,
+                "real_discount_rate_pct": assumptions.real_discount_rate_pct,
+                "design": {
+                    "pv_capacity_kw":      design.pv_capacity_kw,
+                    "wind_quantity":       design.wind_quantity,
+                    "battery_quantity":    design.battery_quantity,
+                    "converter_capacity_kw": design.converter_capacity_kw,
+                },
+                "economics": asdict(econ),
+            }
+
+            econ_path = Path("projects") / selected_project / "outputs" / "results_economics.json"
+            econ_path.parent.mkdir(parents=True, exist_ok=True)
+            econ_path.write_text(
+                json.dumps(econ_payload, indent=2, default=float),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            st.warning(f"Simulation saved but economics computation failed: {exc}")
+
     st.success(
-        f"Candidate {int(selected_candidate_id)} has been simulated and saved to the Results output files. "
-        f"Open the Results page to inspect hourly charts and KPIs."
+        f"Candidate {int(selected_candidate_id)} simulated and economics saved. "
+        f"Open the Results page to inspect hourly charts, KPIs, and NPC breakdown."
     )
 
 # ============================================================

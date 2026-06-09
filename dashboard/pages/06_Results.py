@@ -4,9 +4,11 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from core.components.config import load_components
+from core.project import load_project
 from dashboard.ui.state import get_state
 
 
@@ -94,6 +96,123 @@ def _safe_metric(summary: dict | None, key: str, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _economics_path(project_name: str) -> Path:
+    return Path("projects") / project_name / "outputs" / "results_economics.json"
+
+
+def _show_npc_breakdown(project_name: str) -> None:
+    """
+    HOMER Pro-style NPC cost summary table and bar chart.
+    Reads from results_economics.json saved by the Optimization page.
+    """
+    path = _economics_path(project_name)
+    if not path.exists():
+        st.info(
+            "NPC breakdown not available yet.  \n"
+            "Go to **Optimization** → select a candidate → **Send to Results** "
+            "to generate the cost breakdown."
+        )
+        return
+
+    with open(path, encoding="utf-8") as f:
+        payload = json.load(f)
+
+    cur   = payload.get("currency_symbol", "$")
+    econ  = payload.get("economics", {})
+    des   = payload.get("design", {})
+    life  = payload.get("project_life_years", 25)
+    rdr   = payload.get("real_discount_rate_pct", 0.0)
+
+    # ── Summary metrics ───────────────────────────────────────────────────────
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("NPC",              f"{cur} {econ.get('net_present_cost', 0):,.0f}")
+    s2.metric("LCOE",             f"{cur}/kWh {econ.get('levelized_cost_of_energy', 0):.4f}")
+    s3.metric("Annualized Cost",  f"{cur} {econ.get('annualized_total_cost', 0):,.0f}/yr")
+    s4.metric("Real Discount Rate", f"{rdr:.3f}%  |  {life:.0f} yr project")
+
+    # ── Design point summary ──────────────────────────────────────────────────
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("PV Capacity",   f"{des.get('pv_capacity_kw', 0):,.0f} kW")
+    d2.metric("Wind Turbines", f"{des.get('wind_quantity', 0)}")
+    d3.metric("Battery Strings", f"{des.get('battery_quantity', 0)}")
+    d4.metric("Converter",     f"{des.get('converter_capacity_kw', 0):,.0f} kW")
+
+    # ── NPC breakdown table ───────────────────────────────────────────────────
+    st.markdown("##### NPC Breakdown by Component")
+    st.caption("Matches HOMER Pro Cost Summary — all values are present values over the project life.")
+
+    component_keys = [
+        ("PV Solar",   "pv_breakdown"),
+        ("Wind",       "wind_breakdown"),
+        ("Battery",    "battery_breakdown"),
+        ("Converter",  "converter_breakdown"),
+        ("Grid",       "grid_breakdown"),
+    ]
+
+    rows = []
+    total_cap = total_repl = total_om = total_salv = total_npc = 0.0
+
+    for label, key in component_keys:
+        bd = econ.get(key, {})
+        cap  = bd.get("capital", 0.0)
+        repl = bd.get("replacement_pv", 0.0)
+        om   = bd.get("om_pv", 0.0)
+        salv = bd.get("salvage_pv", 0.0)
+        npc  = cap + repl + om - salv
+        rows.append({
+            "Component":        label,
+            f"Capital ({cur})":      cap,
+            f"Replacement ({cur})":  repl,
+            f"O&M ({cur})":          om,
+            f"Salvage ({cur})":      -salv,     # show as negative (credit)
+            f"Total NPC ({cur})":    npc,
+        })
+        total_cap  += cap;  total_repl += repl
+        total_om   += om;   total_salv += salv
+        total_npc  += npc
+
+    rows.append({
+        "Component":        "System Total",
+        f"Capital ({cur})":      total_cap,
+        f"Replacement ({cur})":  total_repl,
+        f"O&M ({cur})":          total_om,
+        f"Salvage ({cur})":      -total_salv,
+        f"Total NPC ({cur})":    total_npc,
+    })
+
+    table_df = pd.DataFrame(rows).set_index("Component")
+    num_cols  = [c for c in table_df.columns]
+    fmt       = {c: "{:,.0f}" for c in num_cols}
+
+    st.dataframe(
+        table_df.style.format(fmt),
+        use_container_width=True,
+    )
+
+    # ── NPC bar chart ─────────────────────────────────────────────────────────
+    chart_rows = [r for r in rows if r["Component"] != "System Total"]
+    components = [r["Component"] for r in chart_rows]
+    npc_vals   = [r[f"Total NPC ({cur})"] for r in chart_rows]
+
+    colors = ["#1a5fb4", "#26a269", "#e5a50a", "#c01c28", "#7a7a7a"]
+
+    fig = go.Figure(go.Bar(
+        x=components,
+        y=npc_vals,
+        marker_color=colors[:len(components)],
+        text=[f"{cur} {v:,.0f}" for v in npc_vals],
+        textposition="outside",
+    ))
+    fig.update_layout(
+        title=f"NPC by Component  —  Total: {cur} {total_npc:,.0f}",
+        xaxis_title="Component",
+        yaxis_title=f"Net Present Cost ({cur})",
+        height=400,
+        showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def _prepare_chart_df(hourly_df: pd.DataFrame) -> pd.DataFrame:
@@ -279,8 +398,16 @@ with st.expander("Output Files", expanded=False):
     st.write(f"Summary JSON: `{_summary_output_path(selected_project)}`")
 
 # ============================================================
+# NPC / ECONOMICS BREAKDOWN
+# ============================================================
+st.divider()
+st.subheader("Economics — NPC Breakdown")
+_show_npc_breakdown(selected_project)
+
+# ============================================================
 # SUMMARY METRICS
 # ============================================================
+st.divider()
 st.subheader("Key Metrics")
 
 m1, m2, m3, m4, m5 = st.columns(5)
