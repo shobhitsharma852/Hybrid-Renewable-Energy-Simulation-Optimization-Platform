@@ -34,6 +34,17 @@ def _project_dispatch_strategy(project) -> str:
     return getattr(project, "dispatch_strategy", DEFAULT_DISPATCH_STRATEGY)
 
 
+def _get_timezone_offset_hours(tz_name: str) -> float:
+    """Return UTC offset in hours for an IANA timezone name (e.g. 'Asia/Kolkata' → 5.5)."""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        offset = datetime.now(tz=ZoneInfo(tz_name)).utcoffset()
+        return offset.total_seconds() / 3600.0
+    except Exception:
+        return 0.0
+
+
 def _build_default_design_point(components) -> DesignPoint:
     """
     Temporary fallback behavior for single simulation mode.
@@ -157,6 +168,9 @@ def load_project_simulation_inputs(
         design=selected_design,
         time_step_hours=time_step_hours,
         dispatch_strategy=_project_dispatch_strategy(project),
+        latitude_deg=project.location.lat,
+        longitude_deg=project.location.lon,
+        timezone_offset_hours=_get_timezone_offset_hours(project.location.timezone),
     )
 
 

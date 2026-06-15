@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -18,7 +21,6 @@ from core.optimization.constraints import (
     evaluate_candidate_constraints,
 )
 from core.optimization.design_point import DesignPoint
-from core.simulation import HybridSystemSimulator, SimulationInputs
 from core.simulation.energy_balance import validate_energy_balance
 from core.simulation.run_project_simulation import load_project_simulation_inputs
 
@@ -230,6 +232,90 @@ class OptimizationSweepResult:
         return summary
 
 
+# ============================================================
+# WORKER FUNCTIONS (module-level — required for Windows spawn pickling)
+# ============================================================
+
+# Each worker process stores shared simulation inputs here after _worker_init runs.
+_worker_context: dict = {}
+
+
+def _worker_init(
+    base_inputs,
+    constraints: OptimizationConstraints,
+    economic_assumptions: EconomicAssumptions,
+    project_name: str,
+) -> None:
+    """Called once per worker process before any tasks are dispatched."""
+    global _worker_context
+    _worker_context = {
+        "base_inputs": base_inputs,
+        "constraints": constraints,
+        "economic_assumptions": economic_assumptions,
+        "project_name": project_name,
+    }
+
+
+def _evaluate_candidate(task: tuple[int, object]) -> CandidateSimulationResult:
+    """Evaluate one candidate design point in a worker process."""
+    from core.simulation import HybridSystemSimulator, SimulationInputs
+
+    candidate_id, design = task
+    ctx = _worker_context
+    base = ctx["base_inputs"]
+    constraints = ctx["constraints"]
+    economic_assumptions = ctx["economic_assumptions"]
+    project_name = ctx["project_name"]
+
+    try:
+        sim_inputs = SimulationInputs(
+            load_df=base.load_df,
+            resource_df=base.resource_df,
+            components=base.components,
+            design=design,
+            time_step_hours=base.time_step_hours,
+            dispatch_strategy=base.dispatch_strategy,
+            latitude_deg=base.latitude_deg,
+            longitude_deg=base.longitude_deg,
+            timezone_offset_hours=base.timezone_offset_hours,
+        )
+
+        simulator = HybridSystemSimulator(sim_inputs)
+        simulation_results = simulator.run()
+
+        constraint_eval = evaluate_candidate_constraints(
+            constraints=constraints,
+            components=base.components,
+            design=design,
+            simulation_results=simulation_results,
+            time_step_hours=base.time_step_hours,
+        )
+
+        economic_eval = evaluate_candidate_economics(
+            project_name=project_name,
+            components=base.components,
+            design=design,
+            simulation_results=simulation_results,
+            assumptions=economic_assumptions,
+        )
+
+        return _build_candidate_result(
+            candidate_id=candidate_id,
+            design=design,
+            simulation_results=simulation_results,
+            constraint_eval=constraint_eval,
+            economic_eval=economic_eval,
+        )
+    except Exception as exc:
+        return CandidateSimulationResult(
+            candidate_id=candidate_id,
+            design=design,
+            run_success=False,
+            is_feasible=False,
+            error_message=str(exc),
+        )
+
+
 def _get_project_dir(project_name: str) -> Path:
     project_dir = Path("projects") / project_name
     if not project_dir.exists():
@@ -309,6 +395,7 @@ def run_optimization_sweep(
     save_outputs: bool = True,
     constraints: OptimizationConstraints | None = None,
     economic_assumptions: EconomicAssumptions | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> OptimizationSweepResult:
     base_inputs = load_project_simulation_inputs(project_name=project_name)
     candidate_generation = generate_design_candidates(base_inputs.components)
@@ -334,54 +421,24 @@ def run_optimization_sweep(
         total_filtered_out=candidate_generation.total_filtered_out,
     )
 
-    for candidate_id, design in enumerate(candidate_generation.candidates, start=1):
-        try:
-            sim_inputs = SimulationInputs(
-                load_df=base_inputs.load_df,
-                resource_df=base_inputs.resource_df,
-                components=base_inputs.components,
-                design=design,
-                time_step_hours=base_inputs.time_step_hours,
-                dispatch_strategy=base_inputs.dispatch_strategy,
-            )
+    tasks = list(enumerate(candidate_generation.candidates, start=1))
+    total = len(tasks)
+    # Use all available cores — Windows spawn overhead is amortised across the sweep
+    n_workers = min(os.cpu_count() or 1, total)
+    completed = 0
 
-            simulator = HybridSystemSimulator(sim_inputs)
-            simulation_results = simulator.run()
-
-            constraint_eval = evaluate_candidate_constraints(
-                constraints=constraints_used,
-                components=base_inputs.components,
-                design=design,
-                simulation_results=simulation_results,
-                time_step_hours=base_inputs.time_step_hours,
-            )
-
-            economic_eval = evaluate_candidate_economics(
-                project_name=project_name,
-                components=base_inputs.components,
-                design=design,
-                simulation_results=simulation_results,
-                assumptions=economic_assumptions_used,
-            )
-
-            candidate_result = _build_candidate_result(
-                candidate_id=candidate_id,
-                design=design,
-                simulation_results=simulation_results,
-                constraint_eval=constraint_eval,
-                economic_eval=economic_eval,
-            )
-
-        except Exception as exc:
-            candidate_result = CandidateSimulationResult(
-                candidate_id=candidate_id,
-                design=design,
-                run_success=False,
-                is_feasible=False,
-                error_message=str(exc),
-            )
-
-        sweep_result.candidate_results.append(candidate_result)
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        initializer=_worker_init,
+        initargs=(base_inputs, constraints_used, economic_assumptions_used, project_name),
+    ) as pool:
+        futures = {pool.submit(_evaluate_candidate, task): task for task in tasks}
+        for future in as_completed(futures):
+            sweep_result.candidate_results.append(future.result())
+            completed += 1
+            # Throttle Streamlit callbacks to every 10 candidates to limit main-thread overhead
+            if progress_callback is not None and (completed % 10 == 0 or completed == total):
+                progress_callback(completed, total)
 
     if save_outputs:
         save_optimization_sweep_outputs(sweep_result)

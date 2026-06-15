@@ -43,6 +43,9 @@ class SimulationInputs:
     design: DesignPoint
     time_step_hours: float = 1.0
     dispatch_strategy: DispatchStrategy | str = DEFAULT_DISPATCH_STRATEGY
+    latitude_deg: float | None = None
+    longitude_deg: float | None = None
+    timezone_offset_hours: float = 0.0
 
 
 class HybridSystemSimulator:
@@ -392,6 +395,9 @@ class HybridSystemSimulator:
             resource_row=row,
             pv_config=components.pv,
             selected_capacity_kw=selected_pv_capacity_kw,
+            latitude_deg=self.inputs.latitude_deg,
+            longitude_deg=self.inputs.longitude_deg,
+            timezone_offset_hours=self.inputs.timezone_offset_hours,
         )
 
         return result.net_power_kw

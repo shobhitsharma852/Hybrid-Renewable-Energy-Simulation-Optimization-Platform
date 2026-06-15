@@ -9,7 +9,7 @@ import streamlit as st
 
 from core.components.config import load_components
 from core.project import load_project
-from dashboard.ui.state import get_state
+from dashboard.ui.state import active_project_name, set_active_project_folder_name
 
 
 # ============================================================
@@ -258,21 +258,12 @@ def _chart_frame(hourly_df: pd.DataFrame, value_columns: list[str]) -> pd.DataFr
 
 
 def _get_default_project_index(projects: list[str]) -> int:
-    """
-    Default selection priority:
-    1. active project from dashboard ui_state.project_name
-    2. 'Hybrid' if present
-    3. first project
-    """
-    ui = get_state()
-    active_project_name = (ui.project_name or "").strip()
-
-    if active_project_name in projects:
-        return projects.index(active_project_name)
-
+    """Return the index of the last-used project, falling back to first."""
+    name = active_project_name()  # returns folder name — matches list entries
+    if name in projects:
+        return projects.index(name)
     if "Hybrid" in projects:
         return projects.index("Hybrid")
-
     return 0
 
 
@@ -339,6 +330,7 @@ selected_project = st.selectbox(
     options=projects,
     index=default_project_index,
 )
+set_active_project_folder_name(selected_project)
 
 col_refresh, col_info = st.columns([1, 2])
 

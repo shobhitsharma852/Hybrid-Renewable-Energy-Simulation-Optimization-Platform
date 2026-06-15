@@ -30,3 +30,18 @@ def active_project_folder() -> Path | None:
     if not ui.project_folder:
         return None
     return Path(ui.project_folder)
+
+
+def active_project_name() -> str:
+    """Returns the folder name of the active project (matches entries in _list_projects())."""
+    ui = get_state()
+    if ui.project_folder:
+        return Path(ui.project_folder).name
+    return ""
+
+
+def set_active_project_folder_name(folder_name: str) -> None:
+    """Persist a project chosen by folder name back into shared state."""
+    ui = get_state()
+    ui.project_name = folder_name
+    ui.project_folder = str(PROJECTS_DIR / folder_name)

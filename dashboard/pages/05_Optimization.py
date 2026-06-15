@@ -18,6 +18,7 @@ from core.project import load_project
 from core.simulation.run_project_simulation import run_project_simulation
 from dashboard.ui.layout import top_bar
 from dashboard.ui.sidebar import render_left_panel
+from dashboard.ui.state import active_project_name, set_active_project_folder_name
 
 
 st.set_page_config(
@@ -194,11 +195,18 @@ if not projects:
     st.warning("No projects found in the projects folder.")
     st.stop()
 
+def _default_project_index(project_list: list[str]) -> int:
+    name = active_project_name()
+    if name in project_list:
+        return project_list.index(name)
+    return 0
+
 selected_project = st.selectbox(
     "Select Project",
     options=projects,
-    index=projects.index("Hybrid") if "Hybrid" in projects else 0,
+    index=_default_project_index(projects),
 )
+set_active_project_folder_name(selected_project)
 
 currency_symbol = _get_currency_symbol(selected_project)
 
@@ -226,24 +234,35 @@ run_status = None
 # RUN / LOAD
 # ============================================================
 if run_optimization:
-    with st.spinner(f"Running optimization for project: {selected_project}"):
-        result = run_optimization_sweep(
-            project_name=selected_project,
-            save_outputs=True,
-        )
-        optimization_df = result.to_dataframe()
-        optimization_meta = {
-            "project_name": result.project_name,
-            "constraints_used": result.constraints_used.__dict__,
-            "economic_assumptions_used": result.economic_assumptions_used.__dict__,
-            "total_raw_combinations": result.total_raw_combinations,
-            "total_valid_candidates": result.total_valid_candidates,
-            "total_filtered_out": result.total_filtered_out,
-            "successful_runs": sum(1 for x in result.candidate_results if x.run_success),
-            "failed_runs": sum(1 for x in result.candidate_results if not x.run_success),
-            "feasible_candidates": sum(1 for x in result.candidate_results if x.is_feasible),
-        }
-        run_status = "fresh"
+    progress_bar = st.progress(0.0, text="Starting optimization…")
+    status_text  = st.empty()
+
+    def _on_progress(done: int, total: int) -> None:
+        pct = done / total if total > 0 else 0.0
+        progress_bar.progress(pct, text=f"Evaluating candidates: {done} / {total}")
+        status_text.caption(f"{done}/{total} complete — {total - done} remaining")
+
+    result = run_optimization_sweep(
+        project_name=selected_project,
+        save_outputs=True,
+        progress_callback=_on_progress,
+    )
+    progress_bar.progress(1.0, text="Optimization complete!")
+    status_text.empty()
+
+    optimization_df = result.to_dataframe()
+    optimization_meta = {
+        "project_name": result.project_name,
+        "constraints_used": result.constraints_used.__dict__,
+        "economic_assumptions_used": result.economic_assumptions_used.__dict__,
+        "total_raw_combinations": result.total_raw_combinations,
+        "total_valid_candidates": result.total_valid_candidates,
+        "total_filtered_out": result.total_filtered_out,
+        "successful_runs": sum(1 for x in result.candidate_results if x.run_success),
+        "failed_runs": sum(1 for x in result.candidate_results if not x.run_success),
+        "feasible_candidates": sum(1 for x in result.candidate_results if x.is_feasible),
+    }
+    run_status = "fresh"
 
 elif load_saved:
     optimization_df, optimization_meta = _load_saved_optimization_outputs(selected_project)
