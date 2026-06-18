@@ -1,5 +1,6 @@
 import streamlit as st
 
+from dashboard.ui.formatting import formatted_number_input
 from core.components.battery import (
     BatteryComponentConfig,
     validate_battery_component,
@@ -62,8 +63,9 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
             key="ui_battery_nominal_voltage_v",
         )
 
-        nominal_capacity_kwh_per_string = st.number_input(
+        nominal_capacity_kwh_per_string = formatted_number_input(
             "Nominal Capacity per String (kWh)",
+            key="ui_battery_nominal_capacity_kwh_per_string",
             min_value=0.01,
             value=float(
                 st.session_state.get(
@@ -71,8 +73,6 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
                     DEFAULT_BATTERY.nominal_capacity_kwh_per_string,
                 )
             ),
-            step=100.0,
-            key="ui_battery_nominal_capacity_kwh_per_string",
         )
 
         roundtrip_efficiency_pct = st.number_input(
@@ -147,12 +147,11 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
             key="ui_battery_minimum_state_of_charge_pct",
         )
 
-        throughput_kwh = st.number_input(
+        throughput_kwh = formatted_number_input(
             "Throughput (kWh)",
+            key="ui_battery_throughput_kwh",
             min_value=0.0,
             value=float(st.session_state.get("ui_battery_throughput_kwh", DEFAULT_BATTERY.throughput_kwh)),
-            step=10_000.0,
-            key="ui_battery_throughput_kwh",
         )
 
         lifetime_years = st.number_input(
@@ -291,8 +290,9 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
     cl1, cl2 = st.columns(2)
 
     with cl1:
-        cycle_life_a = st.number_input(
+        cycle_life_a = formatted_number_input(
             "Cycle Life A (cycles at 100% DoD)",
+            key="ui_battery_cycle_life_a",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -300,14 +300,12 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
                     DEFAULT_BATTERY.cycle_life_a,
                 )
             ),
-            step=50.0,
-            format="%.0f",
+            decimals=0,
             help=(
                 "Cycles to failure at 100% depth of discharge. "
                 "HOMER Pro Generic Li-Ion default: 750. "
                 "Set to 0 to disable DoD-dependent aging (use Throughput-based EFC model instead)."
             ),
-            key="ui_battery_cycle_life_a",
         )
 
     with cl2:
@@ -401,8 +399,9 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
     c3, c4, c5 = st.columns(3)
 
     with c3:
-        capital_cost_per_string = st.number_input(
+        capital_cost_per_string = formatted_number_input(
             f"Capital Cost per String ({currency_symbol})",
+            key="ui_battery_capital_cost_per_string",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -410,13 +409,12 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
                     DEFAULT_BATTERY.capital_cost_per_string,
                 )
             ),
-            step=10_000.0,
-            key="ui_battery_capital_cost_per_string",
         )
 
     with c4:
-        replacement_cost_per_string = st.number_input(
+        replacement_cost_per_string = formatted_number_input(
             f"Replacement Cost per String ({currency_symbol})",
+            key="ui_battery_replacement_cost_per_string",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -424,13 +422,12 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
                     DEFAULT_BATTERY.replacement_cost_per_string,
                 )
             ),
-            step=10_000.0,
-            key="ui_battery_replacement_cost_per_string",
         )
 
     with c5:
-        om_cost_per_string_per_year = st.number_input(
+        om_cost_per_string_per_year = formatted_number_input(
             f"O&M Cost per String per Year ({currency_symbol})",
+            key="ui_battery_om_cost_per_string_per_year",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -438,8 +435,6 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
                     DEFAULT_BATTERY.om_cost_per_string_per_year,
                 )
             ),
-            step=1000.0,
-            key="ui_battery_om_cost_per_string_per_year",
         )
 
     st.divider()

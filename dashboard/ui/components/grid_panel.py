@@ -1,5 +1,6 @@
 import streamlit as st
 
+from dashboard.ui.formatting import formatted_number_input
 from core.components.grid import (
     GridComponentConfig,
     validate_grid_component,
@@ -59,17 +60,17 @@ def render_grid_component_panel(currency_symbol: str = "₹") -> None:
     c3, c4 = st.columns(2)
 
     with c3:
-        sale_capacity_kw = st.number_input(
+        sale_capacity_kw = formatted_number_input(
             "Maximum Grid Sale Capacity (kW)",
+            key="ui_grid_sale_capacity_kw",
             min_value=0.0,
             value=float(st.session_state.get("ui_grid_sale_capacity_kw", DEFAULT_GRID.sale_capacity_kw)),
-            step=100.0,
-            key="ui_grid_sale_capacity_kw",
         )
 
     with c4:
-        purchase_capacity_kw = st.number_input(
+        purchase_capacity_kw = formatted_number_input(
             "Maximum Grid Purchase Capacity (kW)",
+            key="ui_grid_purchase_capacity_kw",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -77,8 +78,6 @@ def render_grid_component_panel(currency_symbol: str = "₹") -> None:
                     DEFAULT_GRID.purchase_capacity_kw,
                 )
             ),
-            step=100.0,
-            key="ui_grid_purchase_capacity_kw",
         )
 
     st.subheader("Net Metering")

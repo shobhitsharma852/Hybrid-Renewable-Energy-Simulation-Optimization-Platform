@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -213,7 +214,34 @@ def _fetch_nasa_power_chunk(
         }
     )
 
-    return validate_resources_dataframe(df)
+    for col in ["ghi", "ws50m", "temperature"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # NASA POWER uses -999 as a fill value for hours it has not yet processed.
+    # This can occur at BOTH ends: old boundary years (start) and recent months (end).
+    # Strategy: find the first and last valid rows and keep only that contiguous block.
+    fill_mask = (df[["ghi", "ws50m", "temperature"]] < -100).any(axis=1)
+    if fill_mask.any():
+        valid_positions = (~fill_mask).values.nonzero()[0]
+        if len(valid_positions) == 0:
+            return df.iloc[:0].copy()  # entire chunk is fill — caller handles empty
+
+        first_valid = int(valid_positions[0])
+        last_valid  = int(valid_positions[-1])
+        df = df.iloc[first_valid : last_valid + 1].copy().reset_index(drop=True)
+
+        # Sanity check: if fills remain in the interior after trimming both ends,
+        # something unusual happened in the middle of the dataset.
+        interior_fills = (df[["ghi", "ws50m", "temperature"]] < -100).any(axis=1)
+        if interior_fills.any():
+            n = int(interior_fills.sum())
+            first_bad = df.loc[interior_fills, "timestamp"].iloc[0]
+            raise ValueError(
+                f"NASA POWER returned {n} fill value(s) inside the middle of the time series "
+                f"(first at {first_bad}). This is unexpected — try a different year range."
+            )
+
+    return df
 
 
 def fetch_nasa_power_resources(
@@ -223,31 +251,70 @@ def fetch_nasa_power_resources(
     end_year: int,
     timeout: int = 60,
     chunk_years: int = 5,
-) -> pd.DataFrame:
-    actual_start_year, actual_end_year = _clamp_hourly_year_range(start_year, end_year)
+) -> tuple[pd.DataFrame, str | None]:
+    """
+    Download NASA POWER hourly data and return (dataframe, warning_message).
 
+    Chunks are fetched in parallel (one thread per chunk) for speed.
+    Fill values (-999) are trimmed from BOTH the start and end of the combined
+    dataset — NASA may not have finalized data at either boundary.
+    warning_message is None when all requested hours are available, or a
+    human-readable string describing exactly what was trimmed and from which end.
+    """
+    actual_start_year, actual_end_year = _clamp_hourly_year_range(start_year, end_year)
+    chunks = _year_chunks(actual_start_year, actual_end_year, chunk_years)
+
+    # Fetch all chunks in parallel — I/O bound, so threads work well here
     parts: list[pd.DataFrame] = []
-    for chunk_start, chunk_end in _year_chunks(actual_start_year, actual_end_year, chunk_years):
-        chunk_df = _fetch_nasa_power_chunk(
-            lat=lat,
-            lon=lon,
-            start_year=chunk_start,
-            end_year=chunk_end,
-            timeout=timeout,
-        )
-        parts.append(chunk_df)
+    with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
+        futures = {
+            executor.submit(
+                _fetch_nasa_power_chunk, lat, lon, cs, ce, timeout
+            ): (cs, ce)
+            for cs, ce in chunks
+        }
+        for future in as_completed(futures):
+            chunk_df = future.result()   # propagates any exception from the chunk
+            if not chunk_df.empty:
+                parts.append(chunk_df)
 
     if not parts:
-        raise ValueError("No NASA POWER resource data could be downloaded.")
+        raise ValueError(
+            "No valid NASA POWER resource data could be downloaded for the requested period. "
+            "All returned values appear to be fill values (-999). Try a different year range."
+        )
 
-    combined = pd.concat(parts, ignore_index=True)
     combined = (
-        combined.sort_values("timestamp")
+        pd.concat(parts, ignore_index=True)
+        .sort_values("timestamp")
         .drop_duplicates(subset=["timestamp"])
         .reset_index(drop=True)
     )
 
-    return validate_resources_dataframe(combined)
+    validated = validate_resources_dataframe(combined)
+
+    # Compare effective range vs requested range and build a clear warning
+    requested_start = pd.Timestamp(f"{actual_start_year}-01-01 00:00")
+    requested_end   = pd.Timestamp(f"{actual_end_year}-12-31 23:00")
+    effective_start = validated["timestamp"].iloc[0]
+    effective_end   = validated["timestamp"].iloc[-1]
+
+    warnings: list[str] = []
+    if effective_start > requested_start:
+        warnings.append(
+            f"Start trimmed: fill values detected up to {effective_start.strftime('%Y-%m-%d %H:%M')} "
+            f"(requested from {requested_start.strftime('%Y-%m-%d')})."
+        )
+    if effective_end < requested_end:
+        warnings.append(
+            f"End trimmed: fill values detected from "
+            f"{(effective_end + pd.Timedelta(hours=1)).strftime('%Y-%m-%d %H:%M')} onward "
+            f"(requested through {requested_end.strftime('%Y-%m-%d')}) — "
+            f"NASA has not yet finalized these hours."
+        )
+
+    warning = "  |  ".join(warnings) if warnings else None
+    return validated, warning
 
 
 def add_time_features(df: pd.DataFrame) -> pd.DataFrame:

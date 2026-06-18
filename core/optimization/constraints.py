@@ -105,8 +105,8 @@ def _battery_additional_reserve_ac_kw(
         deficit_kw=VERY_LARGE_POWER_KW,
         battery_enabled=True,
         quantity_strings=max(0, int(design.battery_quantity)),
-        nominal_capacity_kwh_per_string=float(
-            getattr(battery_config, "nominal_capacity_kwh_per_string", 0.0)
+        effective_capacity_kwh=float(
+            getattr(record, "effective_capacity_kwh", 0.0)
         ),
         nominal_voltage_v=float(getattr(battery_config, "nominal_voltage_v", 0.0)),
         max_charge_current_a=float(getattr(battery_config, "max_charge_current_a", 0.0)),

@@ -1,5 +1,6 @@
 import streamlit as st
 
+from dashboard.ui.formatting import formatted_number_input
 from core.components.wind import (
     WindComponentConfig,
     WindLossSettings,
@@ -66,12 +67,11 @@ def render_wind_component_panel(currency_symbol: str = "₹") -> None:
             key="ui_wind_turbine_model_name",
         )
 
-        rated_capacity_kw = st.number_input(
+        rated_capacity_kw = formatted_number_input(
             "Rated Capacity (kW)",
+            key="ui_wind_rated_capacity_kw",
             min_value=1.0,
             value=float(st.session_state.get("ui_wind_rated_capacity_kw", DEFAULT_WIND.rated_capacity_kw)),
-            step=100.0,
-            key="ui_wind_rated_capacity_kw",
         )
 
         quantity_options_text = st.text_input(
@@ -83,16 +83,17 @@ def render_wind_component_panel(currency_symbol: str = "₹") -> None:
             key="ui_wind_quantity_options_text",
         )
 
-        hub_height_m = st.number_input(
+        hub_height_m = formatted_number_input(
             "Hub Height (m)",
+            key="ui_wind_hub_height_m",
             min_value=1.0,
             value=float(st.session_state.get("ui_wind_hub_height_m", DEFAULT_WIND.hub_height_m)),
-            key="ui_wind_hub_height_m",
         )
 
     with c2:
-        capital_cost = st.number_input(
+        capital_cost = formatted_number_input(
             f"Capital Cost per Turbine ({currency_symbol})",
+            key="ui_wind_capital_cost_per_turbine",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -100,11 +101,11 @@ def render_wind_component_panel(currency_symbol: str = "₹") -> None:
                     DEFAULT_WIND.capital_cost_per_turbine,
                 )
             ),
-            key="ui_wind_capital_cost_per_turbine",
         )
 
-        replacement_cost = st.number_input(
+        replacement_cost = formatted_number_input(
             f"Replacement Cost per Turbine ({currency_symbol})",
+            key="ui_wind_replacement_cost_per_turbine",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -112,11 +113,11 @@ def render_wind_component_panel(currency_symbol: str = "₹") -> None:
                     DEFAULT_WIND.replacement_cost_per_turbine,
                 )
             ),
-            key="ui_wind_replacement_cost_per_turbine",
         )
 
-        om_cost = st.number_input(
+        om_cost = formatted_number_input(
             f"O&M Cost per Turbine per Year ({currency_symbol})",
+            key="ui_wind_om_cost_per_turbine_per_year",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -124,7 +125,6 @@ def render_wind_component_panel(currency_symbol: str = "₹") -> None:
                     DEFAULT_WIND.om_cost_per_turbine_per_year,
                 )
             ),
-            key="ui_wind_om_cost_per_turbine_per_year",
         )
 
         lifetime = st.number_input(

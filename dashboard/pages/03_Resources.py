@@ -83,6 +83,12 @@ def _show_homer_export_section(df: pd.DataFrame) -> None:
     df["_ts"]    = pd.to_datetime(df["timestamp"])
     df["_month"] = df["_ts"].dt.month
 
+    year_min = int(df["_ts"].dt.year.min())
+    year_max = int(df["_ts"].dt.year.max())
+    years_label = (
+        f"{year_min}–{year_max}" if year_min != year_max else str(year_min)
+    )
+
     month_names = [
         "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December",
@@ -221,11 +227,22 @@ def _show_homer_export_section(df: pd.DataFrame) -> None:
                 range=[0, 1],
                 showgrid=False,
             ),
-            legend=dict(x=0.01, y=0.99, bgcolor="rgba(255,255,255,0.7)"),
-            height=380,
+            legend=dict(
+                orientation="h",
+                yanchor="top",
+                y=-0.18,
+                xanchor="center",
+                x=0.5,
+            ),
+            height=420,
             bargap=0.25,
+            margin=dict(t=60, b=60),
         )
         st.plotly_chart(pv_fig, use_container_width=True)
+        st.caption(
+            f"Each bar is the long-term monthly average computed across all {year_max - year_min + 1} years "
+            f"of data ({years_label}). More years = more stable and representative monthly profile."
+        )
 
     # ── Wind monthly table + chart ────────────────────────────────────────────
     st.divider()
@@ -258,8 +275,13 @@ def _show_homer_export_section(df: pd.DataFrame) -> None:
             yaxis_title="Average Wind Speed (m/s)",
             height=380,
             bargap=0.25,
+            margin=dict(t=60),
         )
         st.plotly_chart(wind_fig, use_container_width=True)
+        st.caption(
+            f"Each bar is the long-term monthly average computed across all {year_max - year_min + 1} years "
+            f"of data ({years_label}). More years = more stable and representative monthly profile."
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -459,7 +481,7 @@ if st.button("Download from NASA POWER", type="primary", use_container_width=Tru
             st.error("End year must be greater than or equal to start year.")
         else:
             with st.spinner("Downloading NASA POWER hourly data..."):
-                df_new = fetch_nasa_power_resources(
+                df_new, trim_warning = fetch_nasa_power_resources(
                     lat=lat,
                     lon=lon,
                     start_year=int(start_year),
@@ -467,6 +489,8 @@ if st.button("Download from NASA POWER", type="primary", use_container_width=Tru
                 )
             st.session_state.current_resources_df = df_new
             st.success("NASA POWER resource data downloaded successfully.")
+            if trim_warning:
+                st.warning(trim_warning)
     except Exception as e:
         st.session_state.current_resources_df = None
         st.error(f"Could not download NASA POWER data: {e}")

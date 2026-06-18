@@ -1,5 +1,6 @@
 import streamlit as st
 
+from dashboard.ui.formatting import formatted_number_input
 from core.components.converter import (
     ConverterComponentConfig,
     validate_converter_component,
@@ -68,16 +69,16 @@ def render_converter_component_panel(currency_symbol: str = "₹") -> None:
         )
 
     with c2:
-        capital_cost_per_kw = st.number_input(
+        capital_cost_per_kw = formatted_number_input(
             f"Capital Cost per kW ({currency_symbol})",
+            key="ui_converter_capital_cost_per_kw",
             min_value=0.0,
             value=float(st.session_state.get("ui_converter_capital_cost_per_kw", DEFAULT_CONVERTER.capital_cost_per_kw)),
-            step=10.0,
-            key="ui_converter_capital_cost_per_kw",
         )
 
-        replacement_cost_per_kw = st.number_input(
+        replacement_cost_per_kw = formatted_number_input(
             f"Replacement Cost per kW ({currency_symbol})",
+            key="ui_converter_replacement_cost_per_kw",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -85,12 +86,11 @@ def render_converter_component_panel(currency_symbol: str = "₹") -> None:
                     DEFAULT_CONVERTER.replacement_cost_per_kw,
                 )
             ),
-            step=10.0,
-            key="ui_converter_replacement_cost_per_kw",
         )
 
-        om_cost_per_kw_per_year = st.number_input(
+        om_cost_per_kw_per_year = formatted_number_input(
             f"O&M Cost per kW per Year ({currency_symbol})",
+            key="ui_converter_om_cost_per_kw_per_year",
             min_value=0.0,
             value=float(
                 st.session_state.get(
@@ -98,8 +98,6 @@ def render_converter_component_panel(currency_symbol: str = "₹") -> None:
                     DEFAULT_CONVERTER.om_cost_per_kw_per_year,
                 )
             ),
-            step=1.0,
-            key="ui_converter_om_cost_per_kw_per_year",
         )
 
     st.subheader("Inverter / Rectifier Settings")

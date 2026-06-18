@@ -1,5 +1,6 @@
 import streamlit as st
 
+from dashboard.ui.formatting import formatted_number_input
 from core.components.pv import (
     PVMPPTSettings,
     PVOrientationSettings,
@@ -60,25 +61,25 @@ def render_pv_component_panel(currency_symbol: str = "₹") -> None:
 
     with c2:
 
-        capital_cost_per_kw = st.number_input(
+        capital_cost_per_kw = formatted_number_input(
             f"Capital Cost per kW ({currency_symbol})",
-            min_value=0.0,
-            value=2500.0,
             key="ui_pv_capital_cost_per_kw",
-        )
-
-        replacement_cost_per_kw = st.number_input(
-            f"Replacement Cost per kW ({currency_symbol})",
             min_value=0.0,
             value=2500.0,
-            key="ui_pv_replacement_cost_per_kw",
         )
 
-        om_cost_per_kw_per_year = st.number_input(
+        replacement_cost_per_kw = formatted_number_input(
+            f"Replacement Cost per kW ({currency_symbol})",
+            key="ui_pv_replacement_cost_per_kw",
+            min_value=0.0,
+            value=2500.0,
+        )
+
+        om_cost_per_kw_per_year = formatted_number_input(
             f"O&M Cost per kW per Year ({currency_symbol})",
+            key="ui_pv_om_cost_per_kw_per_year",
             min_value=0.0,
             value=10.0,
-            key="ui_pv_om_cost_per_kw_per_year",
         )
 
         lifetime_years = st.number_input(

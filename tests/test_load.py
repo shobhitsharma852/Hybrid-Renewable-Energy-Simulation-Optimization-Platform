@@ -44,6 +44,49 @@ def test_standardize_valid_dataframe():
     assert len(out) == 8760
 
 
+def test_standardize_iso_string_full_year_load():
+    timestamps = pd.date_range("2025-01-01 00:00:00", periods=8760, freq="h")
+    df = pd.DataFrame({
+        "timestamp": timestamps.strftime("%Y-%m-%d %H:%M:%S"),
+        "load_kw": [150.0] * 8760,
+    })
+
+    out = standardize_load_dataframe(df)
+
+    assert len(out) == 8760
+    assert out["timestamp"].isna().sum() == 0
+    assert out["timestamp"].iloc[288] == pd.Timestamp("2025-01-13 00:00:00")
+
+
+def test_standardize_dayfirst_string_load():
+    df = pd.DataFrame({
+        "timestamp": ["13-01-2025 00:00", "14-01-2025 00:00"],
+        "load_kw": [10.0, 20.0],
+    })
+
+    out = standardize_load_dataframe(df)
+
+    assert list(out["timestamp"]) == [
+        pd.Timestamp("2025-01-13 00:00:00"),
+        pd.Timestamp("2025-01-14 00:00:00"),
+    ]
+
+
+def test_standardize_does_not_parse_numeric_load_as_timestamp():
+    df = pd.DataFrame({
+        "timestamp": ["2025-01-01 00:00:00", "2025-01-01 01:00:00"],
+        "load_kw": [1057.534, 1220.439],
+    })
+
+    out = standardize_load_dataframe(df)
+
+    assert list(out["load_kw"]) == [1057.534, 1220.439]
+    assert list(out["timestamp"]) == [
+        pd.Timestamp("2025-01-01 00:00:00"),
+        pd.Timestamp("2025-01-01 01:00:00"),
+    ]
+
+
 def test_validate_hourly_load_passes():
     df = make_valid_load_df()
     out = validate_hourly_load(df)
@@ -85,6 +128,25 @@ def test_create_constant_load():
     assert df["load_kw"].iloc[-1] == 100.0
 
 
+def test_create_constant_load_can_apply_homer_style_variability():
+    df = create_constant_load(
+        1000.0,
+        year=2025,
+        daily_variability_pct=10.0,
+        timestep_variability_pct=20.0,
+        random_seed=42,
+        preserve_annual_energy=True,
+    )
+
+    summary = summarize_load(df)
+
+    assert len(df) == 8760
+    assert summary.annual_energy_kwh == pytest.approx(8_760_000.0)
+    assert summary.peak_kw > 1800.0
+    assert summary.min_kw < 300.0
+    assert df["load_kw"].std() == pytest.approx(223.275, abs=0.01)
+
+
 def test_create_daily_profile_load():
     profile = [float(i) for i in range(24)]
     df = create_daily_profile_load(profile, year=2025)
@@ -94,6 +156,25 @@ def test_create_daily_profile_load():
     assert df["load_kw"].iloc[1] == 1.0
     assert df["load_kw"].iloc[23] == 23.0
     assert df["load_kw"].iloc[24] == 0.0
+
+
+def test_create_daily_profile_load_can_apply_homer_style_variability():
+    df = create_daily_profile_load(
+        [1000.0] * 24,
+        year=2025,
+        daily_variability_pct=10.0,
+        timestep_variability_pct=20.0,
+        random_seed=42,
+        preserve_annual_energy=True,
+    )
+
+    summary = summarize_load(df)
+
+    assert len(df) == 8760
+    assert summary.annual_energy_kwh == pytest.approx(8_760_000.0)
+    assert summary.peak_kw > 1800.0
+    assert summary.min_kw < 300.0
+    assert df["load_kw"].std() == pytest.approx(223.275, abs=0.01)
 
 
 def test_save_and_load_roundtrip():
@@ -106,6 +187,45 @@ def test_save_and_load_roundtrip():
 
     assert len(df2) == 8760
     assert abs(df2["load_kw"].sum() - df["load_kw"].sum()) < 1e-9
+
+
+def test_save_generated_variable_load_roundtrip():
+    df = create_constant_load(
+        1000.0,
+        year=2025,
+        daily_variability_pct=10.0,
+        timestep_variability_pct=20.0,
+        random_seed=42,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project_folder = Path(tmp) / "proj1"
+        save_load(df, project_folder)
+        loaded = load_saved_load(project_folder)
+
+    assert len(loaded) == 8760
+    assert loaded["load_kw"].max() == pytest.approx(df["load_kw"].max())
+    assert loaded["timestamp"].iloc[0] == pd.Timestamp("2025-01-01 00:00:00")
+
+
+def test_save_load_writes_iso_timestamps_for_dayfirst_uploads():
+    df = pd.DataFrame({
+        "timestamp": ["13-01-2025 00:00:00", "13-01-2025 01:00:00"],
+        "load_kw": [10.0, 20.0],
+    })
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project_folder = Path(tmp) / "proj1"
+        path = save_load(df, project_folder)
+        saved_text = path.read_text(encoding="utf-8")
+        loaded = load_saved_load(project_folder)
+
+    assert "2025-01-13 00:00:00" in saved_text
+    assert "13-01-2025" not in saved_text
+    assert list(loaded["timestamp"]) == [
+        pd.Timestamp("2025-01-13 00:00:00"),
+        pd.Timestamp("2025-01-13 01:00:00"),
+    ]
 
 
 def test_save_and_load_generation_settings_roundtrip():
@@ -398,6 +518,26 @@ def test_weekday_weekend_monthly_load_timestep_variability_changes_within_day():
     first_day = df.head(24)
 
     assert first_day["load_kw"].nunique() > 1
+
+
+def test_weekday_weekend_monthly_load_uses_homer_style_gaussian_variability():
+    df = create_weekday_weekend_monthly_load(
+        weekday_hourly_profile_kw=[1000.0] * 24,
+        weekend_hourly_profile_kw=[1000.0] * 24,
+        monthly_multipliers=[1.0] * 12,
+        year=2025,
+        daily_variability_pct=10.0,
+        timestep_variability_pct=20.0,
+        random_seed=42,
+        preserve_annual_energy=True,
+    )
+
+    summary = summarize_load(df)
+
+    assert summary.annual_energy_kwh == pytest.approx(8_760_000.0)
+    assert summary.peak_kw > 1800.0
+    assert summary.min_kw < 300.0
+    assert df["load_kw"].std() == pytest.approx(223.275, abs=0.01)
 
 
 def test_weekday_weekend_monthly_load_variability_can_preserve_annual_energy():

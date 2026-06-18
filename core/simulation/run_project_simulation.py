@@ -99,7 +99,10 @@ def _validate_matching_timestamps(
     load_diffs = load_timestamps.diff().dropna()
     resource_diffs = resource_timestamps.diff().dropna()
 
-    if not load_diffs.equals(resource_diffs):
+    load_diff_seconds = load_diffs.dt.total_seconds().reset_index(drop=True)
+    resource_diff_seconds = resource_diffs.dt.total_seconds().reset_index(drop=True)
+
+    if not load_diff_seconds.equals(resource_diff_seconds):
         raise ValueError(
             "Load and resource timestep spacing does not match after resampling; "
             "simulation requires aligned timesteps"

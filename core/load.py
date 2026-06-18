@@ -6,6 +6,8 @@ from typing import BinaryIO
 import io
 import json
 import random
+import re
+import warnings
 
 import pandas as pd
 
@@ -54,35 +56,242 @@ def default_monthly_profiles(default_kw: float) -> list[list[float]]:
     return [[float(default_kw)] * 24 for _ in range(12)]
 
 
-def _rename_load_columns(df: pd.DataFrame) -> pd.DataFrame:
-    col_map: dict[str, str] = {}
+_RE_TIME_ONLY  = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?$")
+_RE_DATE_ONLY  = re.compile(
+    r"^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}$"   # DD-MM-YYYY / MM-DD-YYYY
+    r"|^\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}$"     # YYYY-MM-DD
+)
+_RE_ISO_DATE_PREFIX = re.compile(r"^\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}")
+_RE_PLAIN_NUMBER = re.compile(r"^[+-]?\d+(\.\d+)?$")
+# Keywords that hint a column contains load/power/energy values
+_LOAD_KEYWORDS = {
+    "load", "demand", "consumption", "power", "energy",
+    "kw", "kwh", "active", "import", "export", "usage",
+}
 
-    for c in df.columns:
-        lc = str(c).strip().lower()
 
-        if lc in {"timestamp", "time", "datetime", "date_time", "date-time"}:
-            col_map[c] = "timestamp"
-        elif lc in {"load", "load_kw", "demand", "demand_kw", "power", "kw"}:
-            col_map[c] = "load_kw"
+def _parse_timestamp_series(
+    values: pd.Series,
+    *,
+    prefer_dayfirst: bool = True,
+) -> pd.Series:
+    """
+    Parse timestamps without corrupting ISO dates.
 
-    return df.rename(columns=col_map)
+    Pandas can turn ISO strings like 2025-01-13 into NaT when dayfirst=True.
+    Saved engine files use ISO, while user uploads often use DD-MM-YYYY, so parse
+    ISO-looking rows as year-first and keep day-first as the default otherwise.
+    """
+    series = pd.Series(values).copy()
+
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return pd.to_datetime(series, errors="coerce")
+
+    text = series.astype(str).str.strip()
+    plain_number_mask = text.str.match(_RE_PLAIN_NUMBER)
+    valid_text = series.notna() & text.ne("") & ~plain_number_mask
+    iso_mask = valid_text & text.str.match(_RE_ISO_DATE_PREFIX)
+
+    parsed = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+
+    def _safe_parse_datetime(text_values: pd.Series, *, dayfirst: bool) -> pd.Series:
+        try:
+            return pd.to_datetime(
+                text_values,
+                dayfirst=dayfirst,
+                errors="coerce",
+            )
+        except (OverflowError, ValueError, AssertionError):
+            return pd.Series(pd.NaT, index=text_values.index, dtype="datetime64[ns]")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+
+        if iso_mask.any():
+            parsed.loc[iso_mask] = _safe_parse_datetime(
+                text.loc[iso_mask], dayfirst=False
+            )
+
+        non_iso_mask = valid_text & ~iso_mask
+        if non_iso_mask.any():
+            parsed.loc[non_iso_mask] = _safe_parse_datetime(
+                text.loc[non_iso_mask], dayfirst=prefer_dayfirst
+            )
+
+        # Last chance for mixed files: fill only failed rows using the opposite
+        # day/month preference, preserving the primary interpretation when valid.
+        failed_mask = valid_text & parsed.isna()
+        if failed_mask.any():
+            parsed.loc[failed_mask] = _safe_parse_datetime(
+                text.loc[failed_mask], dayfirst=not prefer_dayfirst
+            )
+
+    return parsed
+
+
+def _classify_columns(df: pd.DataFrame) -> dict[str, list[str]]:
+    """
+    Inspect column VALUES (not names) and sort each column into one of:
+      'datetime'  — contains full date+time  (e.g. '2024-01-01 06:00')
+      'date'      — contains date only       (e.g. '01-01-2024')
+      'time'      — contains HH:MM or HH:MM:SS (e.g. '06:00')
+      'hour_int'  — integers 0-23 repeating  (hour-of-day column)
+      'numeric'   — other positive numeric   (candidate load column)
+      'skip'      — serial numbers / IDs / text
+
+    Regex checks (time-only, date-only) run BEFORE full datetime parsing to prevent
+    dateutil from mis-classifying "01:00" strings as today-at-01:00 (same-date, no variation
+    → skip) instead of a time column.
+    """
+    buckets: dict[str, list[str]] = {
+        "datetime": [], "date": [], "time": [],
+        "hour_int": [], "numeric": [], "skip": [],
+    }
+
+    for col in df.columns:
+        sample = df[col].dropna().head(48)
+        str_s  = sample.astype(str).str.strip()
+
+        if len(str_s) == 0:
+            buckets["skip"].append(col)
+            continue
+
+        # ── 1. Time-only strings: HH:MM or HH:MM:SS ──────────
+        # Must run BEFORE datetime parse: dateutil can parse "01:00" as today at 01:00,
+        # which has_date_var=False and would fall to skip incorrectly.
+        time_hit = str_s.str.match(_RE_TIME_ONLY).mean()
+        if time_hit > 0.8:
+            buckets["time"].append(col)
+            continue
+
+        # ── 2. Date-only strings: DD-MM-YYYY or YYYY-MM-DD ───
+        # Check before datetime parse to avoid same-date samples collapsing to skip.
+        date_hit = str_s.str.match(_RE_DATE_ONLY).mean()
+        if date_hit > 0.8:
+            buckets["date"].append(col)
+            continue
+
+        # ── 3. Full datetime strings: "2024-01-01 06:00" etc. ─
+        parsed = _parse_timestamp_series(str_s, prefer_dayfirst=True)
+        hit_rate = parsed.notna().mean()
+
+        if hit_rate > 0.8:
+            has_time = (parsed.dt.hour != 0).any() or (parsed.dt.minute != 0).any()
+            has_date_var = parsed.dropna().dt.date.nunique() > 1
+            # Qualify as datetime if either time or date variation is present;
+            # a small sample may have only one unique date (e.g. first 3 rows = same day).
+            if has_time or has_date_var:
+                buckets["datetime"].append(col)
+            else:
+                buckets["skip"].append(col)
+            continue
+
+        # ── 4. Numeric ─────────────────────────────────────────
+        numeric = pd.to_numeric(sample, errors="coerce")
+        if numeric.notna().mean() > 0.8 and (numeric.dropna() >= 0).all():
+            vals = numeric.dropna().reset_index(drop=True)
+
+            # Serial-number detection: strictly incrementing by 1 from a small start
+            if len(vals) > 3:
+                diffs = vals.diff().dropna()
+                if (diffs == 1).mean() > 0.95 and vals.iloc[0] <= 10:
+                    buckets["skip"].append(col)
+                    continue
+
+            # Hour-integer detection: values 0-23, ≤24 unique values
+            if vals.max() <= 23 and vals.min() >= 0 and vals.nunique() <= 24:
+                buckets["hour_int"].append(col)
+                continue
+
+            buckets["numeric"].append(col)
+            continue
+
+        buckets["skip"].append(col)
+
+    return buckets
+
+
+def _auto_detect_load_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Automatically extract 'timestamp' and 'load_kw' from any CSV layout.
+
+    Detection is VALUE-BASED:
+      - column headers are used only as a weak secondary hint for the load column
+      - works regardless of language, naming convention, or extra columns
+
+    Supported layouts (non-exhaustive):
+      1. Single combined datetime column  + load column
+      2. Separate date column + time column (HH:MM)  + load column
+      3. Separate date column + hour-integer column (0-23)  + load column
+      4. Any of the above with extra columns (serial numbers, IDs, etc.)
+    """
+    out = df.copy()
+    buckets = _classify_columns(out)
+
+    # ── Build timestamp ────────────────────────────────────────
+    if buckets["datetime"]:
+        # Best case: one column already has full datetime
+        ts_col = buckets["datetime"][0]
+        out["timestamp"] = _parse_timestamp_series(out[ts_col], prefer_dayfirst=True)
+        out = out.drop(columns=[c for c in buckets["datetime"] if c != "timestamp"])
+
+    elif buckets["date"] and buckets["time"]:
+        # Separate date + HH:MM columns
+        date_col = buckets["date"][0]
+        time_col = buckets["time"][0]
+        combined = (
+            out[date_col].astype(str).str.strip()
+            + " "
+            + out[time_col].astype(str).str.strip()
+        )
+        out["timestamp"] = _parse_timestamp_series(combined, prefer_dayfirst=True)
+        out = out.drop(columns=[date_col, time_col])
+
+    elif buckets["date"] and buckets["hour_int"]:
+        # Separate date + integer hour (0, 1, 2, …, 23)
+        date_col = buckets["date"][0]
+        hour_col = buckets["hour_int"][0]
+        hour_str = out[hour_col].apply(lambda h: f"{int(h):02d}:00")
+        combined = out[date_col].astype(str).str.strip() + " " + hour_str
+        out["timestamp"] = _parse_timestamp_series(combined, prefer_dayfirst=True)
+        out = out.drop(columns=[date_col, hour_col])
+
+    # ── Identify the load column ───────────────────────────────
+    if "load_kw" not in out.columns:
+        candidates = [c for c in buckets["numeric"] if c in out.columns]
+
+        if len(candidates) == 1:
+            out = out.rename(columns={candidates[0]: "load_kw"})
+        elif len(candidates) > 1:
+            # Score by how many load-related keywords appear in the column name
+            def _name_score(col: str) -> int:
+                lc = col.lower()
+                return sum(1 for kw in _LOAD_KEYWORDS if kw in lc)
+
+            candidates.sort(key=_name_score, reverse=True)
+            out = out.rename(columns={candidates[0]: "load_kw"})
+
+    return out
 
 
 def standardize_load_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(df, pd.DataFrame):
         raise TypeError("Input must be a pandas DataFrame")
 
-    out = _rename_load_columns(df.copy())
+    if {"timestamp", "load_kw"}.issubset(df.columns):
+        out = df.copy()
+    else:
+        out = _auto_detect_load_columns(df.copy())
 
     if "timestamp" not in out.columns or "load_kw" not in out.columns:
         raise ValueError(
-            "Load data must contain timestamp and load columns "
-            "(for example: timestamp, load_kw)"
+            "Could not detect timestamp and load columns automatically. "
+            "Please ensure the file has a date/time column and a numeric load column."
         )
 
     out = out[["timestamp", "load_kw"]].copy()
 
-    out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
+    out["timestamp"] = _parse_timestamp_series(out["timestamp"], prefer_dayfirst=True)
     if out["timestamp"].isna().any():
         raise ValueError("Some timestamp values are invalid")
 
@@ -437,9 +646,27 @@ def create_constant_load(
     constant_kw: float,
     year: int = 2025,
     expect_rows: int = 8760,
+    daily_variability_pct: float = 0.0,
+    timestep_variability_pct: float = 0.0,
+    random_seed: int | None = None,
+    preserve_annual_energy: bool = True,
 ) -> pd.DataFrame:
     if constant_kw < 0:
         raise ValueError("constant_kw cannot be negative")
+
+    if daily_variability_pct > 0 or timestep_variability_pct > 0:
+        if expect_rows != 8760:
+            raise ValueError("Variable constant loads currently require expect_rows=8760")
+        return create_weekday_weekend_monthly_load(
+            weekday_hourly_profile_kw=[float(constant_kw)] * 24,
+            weekend_hourly_profile_kw=[float(constant_kw)] * 24,
+            monthly_multipliers=[1.0] * 12,
+            year=year,
+            daily_variability_pct=daily_variability_pct,
+            timestep_variability_pct=timestep_variability_pct,
+            random_seed=random_seed,
+            preserve_annual_energy=preserve_annual_energy,
+        )
 
     ts = pd.date_range(f"{year}-01-01 00:00:00", periods=expect_rows, freq="h")
     df = pd.DataFrame({
@@ -453,6 +680,10 @@ def create_daily_profile_load(
     hourly_profile_kw: list[float],
     year: int = 2025,
     days: int = 365,
+    daily_variability_pct: float = 0.0,
+    timestep_variability_pct: float = 0.0,
+    random_seed: int | None = None,
+    preserve_annual_energy: bool = True,
 ) -> pd.DataFrame:
     if len(hourly_profile_kw) != 24:
         raise ValueError("hourly_profile_kw must contain exactly 24 values")
@@ -460,6 +691,20 @@ def create_daily_profile_load(
     vals = [float(v) for v in hourly_profile_kw]
     if any(v < 0 for v in vals):
         raise ValueError("Daily profile values cannot be negative")
+
+    if daily_variability_pct > 0 or timestep_variability_pct > 0:
+        if days != 365:
+            raise ValueError("Variable daily profile loads currently require days=365")
+        return create_weekday_weekend_monthly_load(
+            weekday_hourly_profile_kw=vals,
+            weekend_hourly_profile_kw=vals,
+            monthly_multipliers=[1.0] * 12,
+            year=year,
+            daily_variability_pct=daily_variability_pct,
+            timestep_variability_pct=timestep_variability_pct,
+            random_seed=random_seed,
+            preserve_annual_energy=preserve_annual_energy,
+        )
 
     expect_rows = 24 * days
     ts = pd.date_range(f"{year}-01-01 00:00:00", periods=expect_rows, freq="h")
@@ -653,8 +898,8 @@ def create_weekday_weekend_monthly_profile_load(
     def _variability_multiplier(percent: float) -> float:
         if percent <= 0:
             return 1.0
-        spread = percent / 100.0
-        return rng.uniform(1.0 - spread, 1.0 + spread)
+        sigma = percent / 100.0
+        return max(0.0, rng.gauss(1.0, sigma))
 
     loads: list[float] = []
     for timestamp in ts:
@@ -696,7 +941,9 @@ def create_weekday_weekend_monthly_profile_load(
 
 def save_load(df: pd.DataFrame, project_folder: str | Path) -> Path:
     path = load_file_path(project_folder)
-    df.to_csv(path, index=False)
+    out = standardize_load_dataframe(df)
+    out["timestamp"] = out["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    out.to_csv(path, index=False)
     return path
 
 
@@ -706,6 +953,5 @@ def load_saved_load(project_folder: str | Path) -> pd.DataFrame:
         raise FileNotFoundError(f"Saved load file not found in: {project_folder}")
 
     df = pd.read_csv(path)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df = standardize_load_dataframe(df)
     return validate_hourly_load(df)

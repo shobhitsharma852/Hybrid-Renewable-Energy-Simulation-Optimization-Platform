@@ -25,6 +25,7 @@ from core.load import (
 from dashboard.ui.state import active_project_folder
 from dashboard.ui.sidebar import render_left_panel
 from dashboard.ui.layout import top_bar
+from dashboard.ui.formatting import formatted_number_input
 
 top_bar("Load")
 render_left_panel()
@@ -164,13 +165,12 @@ def _render_annual_energy_scaling() -> None:
             if project.load.scaled_annual_energy_kwh is not None
             else 100000.0
         )
-        scaled_annual_energy_kwh = st.number_input(
+        scaled_annual_energy_kwh = formatted_number_input(
             "Target annual energy (kWh)",
+            key="annual_energy_scaling_target",
             min_value=1.0,
             value=scale_target_default,
-            step=1000.0,
             disabled=not scale_enabled,
-            key="annual_energy_scaling_target",
         )
 
         if st.button("Save Annual Energy Scaling", key="save_annual_energy_scaling"):
@@ -512,18 +512,109 @@ if method == "Upload CSV":
 # Constant Load
 # -----------------------------
 elif method == "Constant Load":
-    constant_kw = st.number_input(
+    constant_kw = formatted_number_input(
         "Enter Constant Load (kW)",
+        key="constant_load_kw",
         min_value=0.0,
         value=1000.0,
-        step=10.0
+    )
+
+    constant_year = st.number_input(
+        "Synthetic load year",
+        min_value=2000,
+        max_value=2100,
+        value=2025,
+        step=1,
+        key="constant_load_year",
+    )
+
+    constant_folder_key = str(folder)
+    if st.session_state.get("_constant_load_settings_loaded_for_folder") != constant_folder_key:
+        saved_load_settings = load_load_generation_settings(folder)
+        st.session_state.load_daily_variability_pct = float(
+            saved_load_settings.daily_variability_pct
+        )
+        st.session_state.load_timestep_variability_pct = float(
+            saved_load_settings.timestep_variability_pct
+        )
+        st.session_state.load_random_seed_enabled = (
+            saved_load_settings.random_seed is not None
+        )
+        st.session_state.load_random_seed = int(saved_load_settings.random_seed or 42)
+        st.session_state.load_preserve_annual_energy = bool(
+            saved_load_settings.preserve_annual_energy
+        )
+        st.session_state["_constant_load_settings_loaded_for_folder"] = constant_folder_key
+
+    st.write("Variability")
+    var_col1, var_col2 = st.columns(2)
+    with var_col1:
+        daily_variability_pct = st.number_input(
+            "Day-to-day variability (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(st.session_state.get("load_daily_variability_pct", 10.0)),
+            step=1.0,
+            help="HOMER-style random standard deviation applied once per full day.",
+            key="load_daily_variability_pct",
+        )
+    with var_col2:
+        timestep_variability_pct = st.number_input(
+            "Timestep variability (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(st.session_state.get("load_timestep_variability_pct", 20.0)),
+            step=1.0,
+            help="HOMER-style random standard deviation applied separately to each timestep.",
+            key="load_timestep_variability_pct",
+        )
+
+    seed_enabled = st.checkbox(
+        "Use repeatable random seed",
+        value=bool(st.session_state.get("load_random_seed_enabled", True)),
+        help="Use the same seed to regenerate the same variable load profile.",
+        key="load_random_seed_enabled",
+    )
+    random_seed = st.number_input(
+        "Random seed",
+        min_value=0,
+        max_value=999999,
+        value=int(st.session_state.get("load_random_seed", 42)),
+        step=1,
+        disabled=not seed_enabled,
+        key="load_random_seed",
+    )
+    preserve_annual_energy = st.checkbox(
+        "Preserve annual energy after variability",
+        value=bool(st.session_state.get("load_preserve_annual_energy", True)),
+        help="Rescale the variable profile back to the constant baseline annual energy.",
+        key="load_preserve_annual_energy",
     )
 
     if st.button("Generate Load"):
         try:
-            load_df = create_constant_load(constant_kw)
+            seed_value = int(random_seed) if seed_enabled else None
+            load_df = create_constant_load(
+                constant_kw,
+                year=int(constant_year),
+                daily_variability_pct=float(daily_variability_pct),
+                timestep_variability_pct=float(timestep_variability_pct),
+                random_seed=seed_value,
+                preserve_annual_energy=bool(preserve_annual_energy),
+            )
+            constant_profiles = [[float(constant_kw)] * 24 for _ in range(12)]
+            generation_settings = LoadGenerationSettings(
+                method="weekday_weekend_monthly",
+                weekday_monthly_profiles_kw=constant_profiles,
+                weekend_monthly_profiles_kw=constant_profiles,
+                daily_variability_pct=float(daily_variability_pct),
+                timestep_variability_pct=float(timestep_variability_pct),
+                random_seed=seed_value,
+                preserve_annual_energy=bool(preserve_annual_energy),
+            )
+            save_load_generation_settings(generation_settings, folder)
             st.session_state.current_load_df = load_df
-            st.success("Constant load generated successfully.")
+            st.success("Constant load generated and settings saved successfully.")
         except Exception as e:
             st.session_state.current_load_df = None
             st.error(f"Could not generate constant load: {e}")
@@ -539,23 +630,113 @@ elif method == "24 Hour Profile":
 
     for i in range(24):
         with cols[i % 6]:
-            val = st.number_input(
+            val = formatted_number_input(
                 f"H{i}",
+                key=f"h{i}",
                 min_value=0.0,
                 value=50.0,
-                step=5.0,
-                key=f"h{i}"
             )
             profile.append(val)
+
+    daily_profile_year = st.number_input(
+        "Synthetic load year",
+        min_value=2000,
+        max_value=2100,
+        value=2025,
+        step=1,
+        key="daily_profile_year",
+    )
+
+    daily_profile_folder_key = str(folder)
+    if st.session_state.get("_daily_profile_settings_loaded_for_folder") != daily_profile_folder_key:
+        saved_load_settings = load_load_generation_settings(folder)
+        st.session_state.load_daily_variability_pct = float(
+            saved_load_settings.daily_variability_pct
+        )
+        st.session_state.load_timestep_variability_pct = float(
+            saved_load_settings.timestep_variability_pct
+        )
+        st.session_state.load_random_seed_enabled = (
+            saved_load_settings.random_seed is not None
+        )
+        st.session_state.load_random_seed = int(saved_load_settings.random_seed or 42)
+        st.session_state.load_preserve_annual_energy = bool(
+            saved_load_settings.preserve_annual_energy
+        )
+        st.session_state["_daily_profile_settings_loaded_for_folder"] = daily_profile_folder_key
+
+    st.write("Variability")
+    var_col1, var_col2 = st.columns(2)
+    with var_col1:
+        daily_variability_pct = st.number_input(
+            "Day-to-day variability (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(st.session_state.get("load_daily_variability_pct", 10.0)),
+            step=1.0,
+            help="HOMER-style random standard deviation applied once per full day.",
+            key="load_daily_variability_pct",
+        )
+    with var_col2:
+        timestep_variability_pct = st.number_input(
+            "Timestep variability (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(st.session_state.get("load_timestep_variability_pct", 20.0)),
+            step=1.0,
+            help="HOMER-style random standard deviation applied separately to each timestep.",
+            key="load_timestep_variability_pct",
+        )
+
+    seed_enabled = st.checkbox(
+        "Use repeatable random seed",
+        value=bool(st.session_state.get("load_random_seed_enabled", True)),
+        help="Use the same seed to regenerate the same variable load profile.",
+        key="load_random_seed_enabled",
+    )
+    random_seed = st.number_input(
+        "Random seed",
+        min_value=0,
+        max_value=999999,
+        value=int(st.session_state.get("load_random_seed", 42)),
+        step=1,
+        disabled=not seed_enabled,
+        key="load_random_seed",
+    )
+    preserve_annual_energy = st.checkbox(
+        "Preserve annual energy after variability",
+        value=bool(st.session_state.get("load_preserve_annual_energy", True)),
+        help="Rescale the variable profile back to the 24-hour baseline annual energy.",
+        key="load_preserve_annual_energy",
+    )
 
     if st.button("Generate Yearly Load"):
         try:
             if len(profile) != 24:
                 st.error("24-hour profile must contain exactly 24 values.")
             else:
-                load_df = create_daily_profile_load(profile)
+                seed_value = int(random_seed) if seed_enabled else None
+                load_df = create_daily_profile_load(
+                    profile,
+                    year=int(daily_profile_year),
+                    daily_variability_pct=float(daily_variability_pct),
+                    timestep_variability_pct=float(timestep_variability_pct),
+                    random_seed=seed_value,
+                    preserve_annual_energy=bool(preserve_annual_energy),
+                )
+                daily_profiles = [[float(v) for v in profile] for _ in range(12)]
+                generation_settings = LoadGenerationSettings(
+                    method="weekday_weekend_monthly",
+                    weekday_monthly_profiles_kw=daily_profiles,
+                    weekend_monthly_profiles_kw=daily_profiles,
+                    daily_variability_pct=float(daily_variability_pct),
+                    timestep_variability_pct=float(timestep_variability_pct),
+                    random_seed=seed_value,
+                    preserve_annual_energy=bool(preserve_annual_energy),
+                )
+                save_load_generation_settings(generation_settings, folder)
                 st.session_state.current_load_df = load_df
-                st.success("8760 hourly load generated successfully from 24-hour profile.")
+                st.success("8760 hourly load generated and settings saved successfully.")
         except Exception as e:
             st.session_state.current_load_df = None
             st.error(f"Could not generate yearly load: {e}")
@@ -696,7 +877,7 @@ elif method == "Weekday/Weekend + Monthly":
             max_value=100.0,
             value=float(st.session_state.get("load_daily_variability_pct", 10.0)),
             step=1.0,
-            help="Applies one random multiplier to each full day.",
+            help="HOMER-style random standard deviation applied once per full day.",
             key="load_daily_variability_pct",
         )
     with var_col2:
@@ -706,7 +887,7 @@ elif method == "Weekday/Weekend + Monthly":
             max_value=100.0,
             value=float(st.session_state.get("load_timestep_variability_pct", 20.0)),
             step=1.0,
-            help="Applies a separate random multiplier to each hourly timestep.",
+            help="HOMER-style random standard deviation applied separately to each timestep.",
             key="load_timestep_variability_pct",
         )
 
