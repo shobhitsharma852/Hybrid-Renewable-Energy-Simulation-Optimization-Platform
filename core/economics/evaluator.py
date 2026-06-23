@@ -362,15 +362,27 @@ def _wind_lifetime_years(components: ComponentsConfig) -> float:
     return max(1.0, _first_numeric_attr(components.wind, ["lifetime_years"], 20.0))
 
 
-def _battery_lifetime_years(components: ComponentsConfig, simulation_results=None) -> float:
+def _battery_lifetime_years(
+    components: ComponentsConfig,
+    design: DesignPoint,
+    simulation_results=None,
+) -> float:
     """
     Effective battery lifetime = min(calendar_life, throughput_life).
 
     Matches HOMER Pro's battery replacement timing:
     - Calendar life: user-entered years (e.g. 15 years)
-    - Throughput life: lifetime_throughput_kwh / annual_throughput_kwh from simulation
+    - Throughput life: total_lifetime_throughput_kwh / annual_throughput_kwh from simulation
 
     Whichever limit is hit first triggers a replacement.
+
+    IMPORTANT — throughput units must match:
+    - components.battery.throughput_kwh is the per-STRING lifetime throughput (from config/UI).
+    - simulation_results.summary.total_battery_throughput_kwh is the TOTAL for ALL strings
+      combined (summed across the full battery bank).
+    - We must multiply per-string throughput by n_strings before dividing, otherwise the
+      apparent battery life is n_strings times too short → far too many replacements.
+
     Reference: NREL/TP-710-42565; HOMER Pro Battery documentation.
     """
     calendar_life = max(1.0, _first_numeric_attr(
@@ -380,12 +392,20 @@ def _battery_lifetime_years(components: ComponentsConfig, simulation_results=Non
     if simulation_results is None:
         return calendar_life
 
-    lifetime_throughput_kwh = _first_numeric_attr(
+    # Per-string lifetime throughput from config (e.g. 3,000,000 kWh per string).
+    per_string_lifetime_kwh = _first_numeric_attr(
         components.battery, ["throughput_kwh"], 0.0
     )
-    if lifetime_throughput_kwh <= EPSILON:
+    if per_string_lifetime_kwh <= EPSILON:
         return calendar_life
 
+    # Scale to the full battery bank — simulation throughput covers ALL strings.
+    n_strings = max(1, int(design.battery_quantity))
+    total_lifetime_throughput_kwh = per_string_lifetime_kwh * n_strings
+
+    # Annual throughput for all strings combined (from simulation summary).
+    # Uses HOMER Pro convention: (charge_DC + discharge_AC) / 2 per timestep,
+    # so this value matches the unit in which manufacturers specify lifetime throughput.
     annual_throughput_kwh = max(0.0, float(
         getattr(getattr(simulation_results, "summary", None),
                 "total_battery_throughput_kwh", 0.0)
@@ -393,7 +413,7 @@ def _battery_lifetime_years(components: ComponentsConfig, simulation_results=Non
     if annual_throughput_kwh <= EPSILON:
         return calendar_life
 
-    throughput_life = lifetime_throughput_kwh / annual_throughput_kwh
+    throughput_life = total_lifetime_throughput_kwh / annual_throughput_kwh
     return max(1.0, min(calendar_life, throughput_life))
 
 
@@ -504,8 +524,9 @@ def evaluate_candidate_economics(
         _wind_total_replacement_cost(components, design),
         _wind_lifetime_years(components), N, r,
     )
-    # Battery effective lifetime = min(calendar life, throughput life)
-    batt_effective_life = _battery_lifetime_years(components, simulation_results)
+    # Battery effective lifetime = min(calendar life, throughput life).
+    # Pass design so the function can scale per-string lifetime throughput by n_strings.
+    batt_effective_life = _battery_lifetime_years(components, design, simulation_results)
 
     batt_repl_pv = _replacement_present_value(
         _battery_total_replacement_cost(components, design),
