@@ -16,6 +16,50 @@ from core.simulation import HybridSystemSimulator, SimulationInputs
 from core.simulation.energy_balance import validate_energy_balance
 
 
+_REF_DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+
+def _to_simulation_year(resource_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Collapse a multi-year resource DataFrame into a single representative year
+    (8,760 hourly rows) by averaging each (month, hour-of-day) slot across all years.
+    Feb 29 is included in the February mean so monthly averages are consistent.
+    Single-year data is returned unchanged.
+    """
+    ts = pd.to_datetime(resource_df["timestamp"])
+    if ts.dt.year.min() == ts.dt.year.max():
+        return resource_df  # already a single year — nothing to do
+
+    df = resource_df.copy()
+    df["_month"] = ts.dt.month
+    df["_hour"]  = ts.dt.hour
+
+    numeric_cols = [
+        c for c in ["ghi", "ws50m", "temperature", "g0_w_m2", "clearness_index"]
+        if c in df.columns
+    ]
+
+    avg_by_mh = (
+        df.groupby(["_month", "_hour"], as_index=False)[numeric_cols]
+        .mean()
+    )
+
+    ref_ts = pd.date_range("2001-01-01", periods=8760, freq="h")
+    rows: list[dict] = []
+    for m, n_days in enumerate(_REF_DAYS_IN_MONTH, start=1):
+        mh = avg_by_mh[avg_by_mh["_month"] == m].set_index("_hour")
+        for _ in range(n_days):
+            for h in range(24):
+                row: dict = {}
+                for col in numeric_cols:
+                    row[col] = float(mh.at[h, col]) if h in mh.index else 0.0
+                rows.append(row)
+
+    out = pd.DataFrame(rows)
+    out.insert(0, "timestamp", ref_ts)
+    return out
+
+
 def _get_project_dir(project_name: str) -> Path:
     project_dir = Path("projects") / project_name
     if not project_dir.exists():
@@ -148,6 +192,11 @@ def load_project_simulation_inputs(
     resource_df = pd.read_csv(resource_path)
     resource_df["timestamp"] = pd.to_datetime(resource_df["timestamp"])
     resource_df = validate_resources_dataframe(resource_df)
+    # Collapse multi-year resource data to a single representative year so the
+    # row count matches the load profile. Uses per-(month, hour-of-day) mean
+    # across all years — same algorithm as the HOMER export on the Resources page,
+    # so simulation and HOMER optimization run on identical resource inputs.
+    resource_df = _to_simulation_year(resource_df)
 
     # Resample both datasets to the project's chosen time resolution
     if time_step_minutes != 60:
