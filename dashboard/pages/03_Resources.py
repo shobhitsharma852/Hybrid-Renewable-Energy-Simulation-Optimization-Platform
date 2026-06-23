@@ -82,6 +82,10 @@ def _show_homer_export_section(df: pd.DataFrame) -> None:
     df = df.copy()
     df["_ts"]    = pd.to_datetime(df["timestamp"])
     df["_month"] = df["_ts"].dt.month
+    project_file_name = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_"
+        for char in project.meta.name.strip()
+    ) or "project"
 
     year_min = int(df["_ts"].dt.year.min())
     year_max = int(df["_ts"].dt.year.max())
@@ -132,6 +136,47 @@ def _show_homer_export_section(df: pd.DataFrame) -> None:
     ann_ws     = wind_table["Average (m/s)"].mean()
 
     # ── Three download buttons ────────────────────────────────────────────────
+    # Solar and Wind buttons output a HOMER-compatible average year (8,760 rows).
+    # When multi-year data is loaded, each hourly slot is the mean across all years —
+    # so HOMER detects "Time step: 60 min" and its monthly profile matches ours.
+    # For a single-year dataset the average year equals the year itself.
+
+    # Build HOMER-compatible average year (8,760 rows).
+    # Group by (month, hour-of-day) across all years — Feb 29 is included in the
+    # February mean so the monthly averages exactly match the profile tables below.
+    # Each calendar day in the output repeats the month's mean diurnal profile;
+    # HOMER's monthly display then matches our model to the last decimal place.
+    df_avg = df.copy()
+    df_avg["_hour"] = df_avg["_ts"].dt.hour
+
+    avg_by_mh = (
+        df_avg
+        .groupby(["_month", "_hour"], as_index=False)
+        .agg(ghi_avg=("ghi", "mean"), ws50m_avg=("ws50m", "mean"), temp_avg=("temperature", "mean"))
+    )
+
+    # Expand to 8,760 rows using standard non-leap calendar (Feb = 28 days)
+    _ref_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    ref_rows: list[dict] = []
+    for m, n_days in enumerate(_ref_days, start=1):
+        mh = avg_by_mh[avg_by_mh["_month"] == m].set_index("_hour")
+        for _ in range(n_days):
+            for h in range(24):
+                ref_rows.append({
+                    "ghi_avg":   float(mh.at[h, "ghi_avg"])   if h in mh.index else 0.0,
+                    "ws50m_avg": float(mh.at[h, "ws50m_avg"]) if h in mh.index else 0.0,
+                    "temp_avg":  float(mh.at[h, "temp_avg"])  if h in mh.index else 0.0,
+                })
+
+    avg_grp = pd.DataFrame(ref_rows)
+    ref_ts = pd.date_range("2001-01-01", periods=8760, freq="h")
+    avg_year_ok = len(avg_grp) == 8760
+    if avg_year_ok:
+        avg_grp["ref_ts"] = ref_ts.strftime("%Y-%m-%d %H:%M")
+
+    n_years = year_max - year_min + 1
+    avg_label = f"{years_label} avg" if n_years > 1 else str(year_min)
+
     c1, c2, c3 = st.columns(3)
 
     with c1:
@@ -146,38 +191,95 @@ def _show_homer_export_section(df: pd.DataFrame) -> None:
         st.caption("Original hourly data — GHI in Wh/m², wind in m/s, temp in °C")
 
     with c2:
-        pv_csv = pd.DataFrame({
-            "timestamp":      df["_ts"].dt.strftime("%Y-%m-%d %H:%M"),
-            "ghi_kwh_per_m2": (df["ghi"] / 1000.0).round(6),
-        })
+        if avg_year_ok:
+            pv_csv = pd.DataFrame({
+                "timestamp":      avg_grp["ref_ts"],
+                "ghi_kwh_per_m2": (avg_grp["ghi_avg"] / 1000.0).round(6),
+            })
+            solar_caption = (
+                f"8,760 rows ({avg_label})  |  GHI in kWh/m²  |  "
+                "HOMER Pro: Resources → Solar GHI"
+            )
+        else:
+            # Fallback to raw export if groupby row count is unexpected
+            pv_csv = pd.DataFrame({
+                "timestamp":      df["_ts"].dt.strftime("%Y-%m-%d %H:%M"),
+                "ghi_kwh_per_m2": (df["ghi"] / 1000.0).round(6),
+            })
+            solar_caption = "GHI / 1000 → kWh/m²  |  timestamp: yyyy-mm-dd hh:mm"
         st.download_button(
             "Download Solar CSV  (kWh/m²)",
             data=pv_csv.to_csv(index=False).encode("utf-8"),
-            file_name="solar_resource.csv",
+            file_name=f"solar_resource_{project_file_name}.csv",
             mime="text/csv",
             use_container_width=True,
         )
-        st.caption(
-            "GHI / 1000 → kWh/m²  |  timestamp: yyyy-mm-dd hh:mm  |  "
-            "Import in HOMER Pro: Resources → Solar GHI"
-        )
+        st.caption(solar_caption)
 
     with c3:
-        wind_csv = pd.DataFrame({
-            "timestamp":      df["_ts"].dt.strftime("%Y-%m-%d %H:%M"),
-            "wind_speed_mps": df["ws50m"].round(4),
-        })
+        if avg_year_ok:
+            wind_csv = pd.DataFrame({
+                "timestamp":      avg_grp["ref_ts"],
+                "wind_speed_mps": avg_grp["ws50m_avg"].round(4),
+            })
+            wind_caption = (
+                f"8,760 rows ({avg_label})  |  wind speed in m/s  |  "
+                "HOMER Pro: Resources → Wind (anemometer height = 50 m)"
+            )
+        else:
+            wind_csv = pd.DataFrame({
+                "timestamp":      df["_ts"].dt.strftime("%Y-%m-%d %H:%M"),
+                "wind_speed_mps": df["ws50m"].round(4),
+            })
+            wind_caption = "Wind speed in m/s  |  timestamp: yyyy-mm-dd hh:mm"
         st.download_button(
             "Download Wind CSV  (m/s)",
             data=wind_csv.to_csv(index=False).encode("utf-8"),
-            file_name="wind_resource.csv",
+            file_name=f"wind_resource_{project_file_name}.csv",
             mime="text/csv",
             use_container_width=True,
         )
-        st.caption(
-            "Wind speed in m/s  |  timestamp: yyyy-mm-dd hh:mm  |  "
-            "Import in HOMER Pro: Resources → Wind  (anemometer height = 50 m)"
+        st.caption(wind_caption)
+
+    # ── Temperature CSV (HOMER: Resources → Temperature) ─────────────────────
+    t1, t2, t3 = st.columns([1, 1, 1])
+    with t1:
+        if avg_year_ok:
+            temp_csv = pd.DataFrame({
+                "timestamp":     avg_grp["ref_ts"],
+                "temperature_c": avg_grp["temp_avg"].round(3),
+            })
+            temp_caption = (
+                f"8,760 rows ({avg_label})  |  ambient temperature in °C  |  "
+                "HOMER Pro: Resources → Temperature → Import time series"
+            )
+        else:
+            temp_csv = pd.DataFrame({
+                "timestamp":     df["_ts"].dt.strftime("%Y-%m-%d %H:%M"),
+                "temperature_c": df["temperature"].round(3),
+            })
+            temp_caption = "Ambient temperature in °C  |  timestamp: yyyy-mm-dd hh:mm"
+        st.download_button(
+            "Download Temperature CSV  (°C)",
+            data=temp_csv.to_csv(index=False).encode("utf-8"),
+            file_name=f"temperature_{project_file_name}.csv",
+            mime="text/csv",
+            use_container_width=True,
         )
+        st.caption(temp_caption)
+
+    # ── Build monthly temperature table ──────────────────────────────────────
+    has_temp = "temperature" in df.columns
+    temp_rows = []
+    if has_temp:
+        for m in range(1, 13):
+            mdf_t = df[df["_month"] == m]
+            temp_rows.append({
+                "Month":               month_names[m - 1],
+                "Avg Temperature (°C)": round(float(mdf_t["temperature"].mean()), 2),
+            })
+    temp_table  = pd.DataFrame(temp_rows)
+    ann_temp    = float(temp_table["Avg Temperature (°C)"].mean()) if has_temp else 0.0
 
     # ── PV monthly table + chart ──────────────────────────────────────────────
     st.divider()
@@ -282,6 +384,46 @@ def _show_homer_export_section(df: pd.DataFrame) -> None:
             f"Each bar is the long-term monthly average computed across all {year_max - year_min + 1} years "
             f"of data ({years_label}). More years = more stable and representative monthly profile."
         )
+
+    # ── Temperature monthly table + chart ────────────────────────────────────
+    if has_temp and not temp_table.empty:
+        st.divider()
+        st.markdown("#### Monthly Temperature Profile")
+
+        tm_left, tm_right = st.columns([1, 2])
+
+        with tm_left:
+            st.dataframe(
+                temp_table,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Avg Temperature (°C)": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+            st.caption(f"Annual Average: **{ann_temp:.2f} °C**")
+
+        with tm_right:
+            temp_fig = go.Figure()
+            temp_fig.add_trace(go.Bar(
+                x=month_abbr,
+                y=temp_table["Avg Temperature (°C)"].tolist(),
+                name="Avg Temperature (°C)",
+                marker_color="#e74c3c",
+            ))
+            temp_fig.update_layout(
+                title=f"Monthly Temperature Profile  —  Annual Avg: {ann_temp:.2f} °C",
+                xaxis_title="Month",
+                yaxis_title="Average Temperature (°C)",
+                height=380,
+                bargap=0.25,
+                margin=dict(t=60),
+            )
+            st.plotly_chart(temp_fig, use_container_width=True)
+            st.caption(
+                f"Monthly average ambient temperature from NASA POWER ({years_label}). "
+                "These values match what HOMER Pro shows as 'Daily Temperature' in Resources → Temperature."
+            )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
