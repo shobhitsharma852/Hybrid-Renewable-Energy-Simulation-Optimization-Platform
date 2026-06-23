@@ -189,6 +189,41 @@ def test_save_and_load_roundtrip():
     assert abs(df2["load_kw"].sum() - df["load_kw"].sum()) < 1e-9
 
 
+def test_save_load_replaces_existing_file_atomically():
+    original = make_valid_load_df()
+    updated = make_valid_load_df()
+    updated["load_kw"] = 275.0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project_folder = Path(tmp) / "proj1"
+        path = save_load(original, project_folder)
+        save_load(updated, project_folder)
+        loaded = load_saved_load(project_folder)
+
+        assert not path.with_name(f".{path.name}.tmp").exists()
+
+    assert loaded["load_kw"].iloc[0] == pytest.approx(275.0)
+
+
+def test_save_load_reports_locked_file_clearly(monkeypatch):
+    df = make_valid_load_df()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project_folder = Path(tmp) / "proj1"
+        path = save_load(df, project_folder)
+        temp_path = path.with_name(f".{path.name}.tmp")
+
+        def _raise_permission_error(self, target):
+            raise PermissionError("file is locked")
+
+        monkeypatch.setattr(Path, "replace", _raise_permission_error)
+
+        with pytest.raises(PermissionError, match="Close this CSV in Excel"):
+            save_load(df, project_folder)
+
+        assert not temp_path.exists()
+
+
 def test_save_generated_variable_load_roundtrip():
     df = create_constant_load(
         1000.0,

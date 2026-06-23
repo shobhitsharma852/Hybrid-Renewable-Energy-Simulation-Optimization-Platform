@@ -943,7 +943,21 @@ def save_load(df: pd.DataFrame, project_folder: str | Path) -> Path:
     path = load_file_path(project_folder)
     out = standardize_load_dataframe(df)
     out["timestamp"] = out["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
-    out.to_csv(path, index=False)
+    temp_path = path.with_name(f".{path.name}.tmp")
+
+    try:
+        out.to_csv(temp_path, index=False)
+        temp_path.replace(path)
+    except PermissionError as exc:
+        temp_path.unlink(missing_ok=True)
+        raise PermissionError(
+            f"Cannot save '{path}'. Close this CSV in Excel or any other program, "
+            "then click 'Save Load to Project' again."
+        ) from exc
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
     return path
 
 
