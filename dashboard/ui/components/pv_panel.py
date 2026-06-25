@@ -39,16 +39,48 @@ def render_pv_component_panel(currency_symbol: str = "₹") -> None:
             key="ui_pv_enabled",
         )
 
-        use_search_space = st.checkbox(
-            "Use Search Space",
-            value=st.session_state.get("ui_pv_use_search_space", True),
-            key="ui_pv_use_search_space",
+        _sizing_mode_idx = 0 if st.session_state.get("ui_pv_use_search_space", True) else 1
+        _sizing_mode = st.radio(
+            "Sizing Mode",
+            ["Discrete Options", "InSolare Optimizer"],
+            index=_sizing_mode_idx,
+            horizontal=True,
+            key="ui_pv_sizing_mode",
         )
-        capacity_kw_options_text = st.text_input(
-            "PV Capacity Search Space (kW)",
-            value="0, 1000, 2000, 3000",
-            key="ui_pv_capacity_kw_options_text",
-        )
+        use_search_space = (_sizing_mode == "Discrete Options")
+        st.session_state["ui_pv_use_search_space"] = use_search_space
+
+        if use_search_space:
+            capacity_kw_options_text = st.text_input(
+                "PV Capacity Options (kW)",
+                value="0, 1000, 2000, 3000",
+                key="ui_pv_capacity_kw_options_text",
+            )
+        else:
+            capacity_kw_options_text = st.session_state.get("ui_pv_capacity_kw_options_text", "0, 1000")
+            set_limits = st.checkbox(
+                "Set Limits",
+                value=st.session_state.get("ui_pv_optimizer_set_limits", False),
+                key="ui_pv_optimizer_set_limits",
+            )
+            if set_limits:
+                _ol, _ou = st.columns(2)
+                with _ol:
+                    st.number_input(
+                        "Minimum (kW)",
+                        min_value=0.0,
+                        value=float(st.session_state.get("ui_pv_optimizer_kw_min", 0.0)),
+                        step=100.0,
+                        key="ui_pv_optimizer_kw_min",
+                    )
+                with _ou:
+                    st.number_input(
+                        "Maximum (kW)",
+                        min_value=0.0,
+                        value=float(st.session_state.get("ui_pv_optimizer_kw_max", 15000.0)),
+                        step=100.0,
+                        key="ui_pv_optimizer_kw_max",
+                    )
 
         derating_factor = st.number_input(
             "Derating Factor",

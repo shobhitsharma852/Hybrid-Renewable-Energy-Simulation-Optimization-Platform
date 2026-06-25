@@ -29,7 +29,10 @@ class HourlySimulationRecord:
     # Converter losses
     inverter_loss_kw: float = 0.0
     rectifier_loss_kw: float = 0.0
-    self_discharge_loss_kwh: float = 0.0
+    inverter_input_dc_kw: float = 0.0
+    inverter_output_ac_kw: float = 0.0
+    rectifier_input_ac_kw: float = 0.0
+    rectifier_output_dc_kw: float = 0.0
 
     # Battery health fields — populated from BatteryState after each dispatch step.
     # effective_capacity_kwh: actual usable capacity after any future capacity fade;
@@ -65,10 +68,18 @@ class SimulationSummary:
 
     total_inverter_loss_kwh: float = 0.0
     total_rectifier_loss_kwh: float = 0.0
-    total_self_discharge_loss_kwh: float = 0.0
+    total_inverter_input_kwh: float = 0.0
+    total_inverter_output_kwh: float = 0.0
+    total_rectifier_input_kwh: float = 0.0
+    total_rectifier_output_kwh: float = 0.0
 
     renewable_fraction: float = 0.0
     annual_capacity_shortage_pct: float = 0.0
+    unmet_load_fraction_pct: float = 0.0
+    total_capacity_shortage_kwh: float = 0.0
+    total_reserve_shortfall_kwh: float = 0.0
+    max_reserve_shortfall_kw: float = 0.0
+    reserve_shortfall_hours: int = 0
 
     # Extra reporting metrics
     gross_renewable_fraction: float = 0.0

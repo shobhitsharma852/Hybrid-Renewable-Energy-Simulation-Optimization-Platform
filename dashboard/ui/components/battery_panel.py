@@ -33,11 +33,16 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
             key="ui_battery_enabled",
         )
 
-        use_search_space = st.checkbox(
-            "Use Search Space",
-            value=st.session_state.get("ui_battery_use_search_space", DEFAULT_BATTERY.use_search_space),
-            key="ui_battery_use_search_space",
+        _sizing_mode_idx = 0 if st.session_state.get("ui_battery_use_search_space", DEFAULT_BATTERY.use_search_space) else 1
+        _sizing_mode = st.radio(
+            "Sizing Mode",
+            ["Discrete Options", "InSolare Optimizer"],
+            index=_sizing_mode_idx,
+            horizontal=True,
+            key="ui_battery_sizing_mode",
         )
+        use_search_space = (_sizing_mode == "Discrete Options")
+        st.session_state["ui_battery_use_search_space"] = use_search_space
 
         battery_model_name = st.text_input(
             "Battery Model Name",
@@ -45,15 +50,44 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
             key="ui_battery_model_name",
         )
 
-        quantity_options_text = st.text_input(
-            "Battery Quantity Search Space (# strings)",
-            value=st.session_state.get(
-                "battery_quantity_options_text",
+        if use_search_space:
+            quantity_options_text = st.text_input(
+                "Quantity Options (# strings)",
+                value=st.session_state.get(
+                    "ui_battery_quantity_options_text",
+                    ", ".join(str(v) for v in DEFAULT_BATTERY.quantity_options),
+                ),
+                help="Enter comma-separated battery string quantities.",
+                key="ui_battery_quantity_options_text",
+            )
+        else:
+            quantity_options_text = st.session_state.get(
+                "ui_battery_quantity_options_text",
                 ", ".join(str(v) for v in DEFAULT_BATTERY.quantity_options),
-            ),
-            help="Enter comma-separated battery string quantities.",
-            key="ui_battery_quantity_options_text",
-        )
+            )
+            set_limits = st.checkbox(
+                "Set Limits",
+                value=st.session_state.get("ui_battery_optimizer_set_limits", False),
+                key="ui_battery_optimizer_set_limits",
+            )
+            if set_limits:
+                _ol, _ou = st.columns(2)
+                with _ol:
+                    st.number_input(
+                        "Minimum (strings)",
+                        min_value=0,
+                        value=int(st.session_state.get("ui_battery_optimizer_qty_min", 0)),
+                        step=1,
+                        key="ui_battery_optimizer_qty_min",
+                    )
+                with _ou:
+                    st.number_input(
+                        "Maximum (strings)",
+                        min_value=0,
+                        value=int(st.session_state.get("ui_battery_optimizer_qty_max", 40)),
+                        step=1,
+                        key="ui_battery_optimizer_qty_max",
+                    )
 
         nominal_voltage_v = st.number_input(
             "Nominal Voltage (V)",
@@ -160,22 +194,6 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
             value=int(st.session_state.get("ui_battery_lifetime_years", DEFAULT_BATTERY.lifetime_years)),
             step=1,
             key="ui_battery_lifetime_years",
-        )
-
-        self_discharge_rate_pct_per_day = st.number_input(
-            "Self-Discharge Rate (%/day)",
-            min_value=0.0,
-            max_value=100.0,
-            value=float(
-                st.session_state.get(
-                    "battery_self_discharge_rate_pct_per_day",
-                    DEFAULT_BATTERY.self_discharge_rate_pct_per_day,
-                )
-            ),
-            step=0.01,
-            format="%.3f",
-            help="Li-Ion typical: 0.05–0.1 %/day. Lead-acid: 0.1–0.3 %/day.",
-            key="ui_battery_self_discharge_rate_pct_per_day",
         )
 
     st.subheader("Capacity Fade")
@@ -461,7 +479,6 @@ def render_battery_component_panel(currency_symbol: str = "₹") -> None:
                 initial_state_of_charge_pct=float(initial_state_of_charge_pct),
                 minimum_state_of_charge_pct=float(minimum_state_of_charge_pct),
                 throughput_kwh=float(throughput_kwh),
-                self_discharge_rate_pct_per_day=float(self_discharge_rate_pct_per_day),
                 replacement_degradation_limit_pct=float(replacement_degradation_limit_pct),
                 calendar_fade_pct_per_year=float(calendar_fade_pct_per_year),
                 arrhenius_ea_ev=float(arrhenius_ea_ev),
@@ -503,7 +520,6 @@ def build_battery_component_from_state(
     initial_state_of_charge_pct: float,
     minimum_state_of_charge_pct: float,
     throughput_kwh: float,
-    self_discharge_rate_pct_per_day: float,
     replacement_degradation_limit_pct: float,
     calendar_fade_pct_per_year: float,
     arrhenius_ea_ev: float,
@@ -535,7 +551,6 @@ def build_battery_component_from_state(
         initial_state_of_charge_pct=float(initial_state_of_charge_pct),
         minimum_state_of_charge_pct=float(minimum_state_of_charge_pct),
         throughput_kwh=float(throughput_kwh),
-        self_discharge_rate_pct_per_day=float(self_discharge_rate_pct_per_day),
         replacement_degradation_limit_pct=float(replacement_degradation_limit_pct),
         calendar_fade_pct_per_year=float(calendar_fade_pct_per_year),
         arrhenius_ea_ev=float(arrhenius_ea_ev),

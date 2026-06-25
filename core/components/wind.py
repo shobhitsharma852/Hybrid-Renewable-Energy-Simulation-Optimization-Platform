@@ -129,6 +129,11 @@ class WindComponentConfig:
     # Example: [0, 1, 2, 3, 4]
     quantity_options: list[int] = field(default_factory=lambda: [0, 1])
 
+    # InSolare Optimizer bounds (active when use_search_space=False and optimizer_set_limits=True)
+    optimizer_qty_min: int = 0
+    optimizer_qty_max: int = 4
+    optimizer_set_limits: bool = False
+
     # Economic parameters per turbine
     capital_cost_per_turbine: float = 3_000_000.0
     replacement_cost_per_turbine: float = 3_000_000.0
@@ -242,6 +247,11 @@ def validate_wind_component(wind: WindComponentConfig) -> None:
         raise ValueError("Wind rated_capacity_kw must be > 0")
 
     _validate_non_negative_int_list(wind.quantity_options, "Wind quantity_options")
+
+    if wind.optimizer_qty_min < 0 or wind.optimizer_qty_max < 0:
+        raise ValueError("Wind optimizer bounds must be >= 0")
+    if wind.optimizer_qty_min > wind.optimizer_qty_max:
+        raise ValueError("Wind optimizer_qty_min must be <= optimizer_qty_max")
 
     if wind.capital_cost_per_turbine < 0:
         raise ValueError("Wind capital_cost_per_turbine cannot be negative")

@@ -13,6 +13,10 @@ from core.economics.evaluator import (
     evaluate_candidate_economics,
 )
 from core.optimization.design_point import DesignPoint
+from core.optimization.insolare_optimizer import (
+    load_insolare_optimizer_outputs,
+    run_insolare_optimizer,
+)
 from core.optimization.optimizer import run_optimization_sweep
 from core.project import load_project
 from core.simulation.run_project_simulation import run_project_simulation
@@ -64,6 +68,14 @@ def _optimization_csv_path(project_name: str) -> Path:
 
 def _optimization_meta_path(project_name: str) -> Path:
     return _outputs_dir(project_name) / "optimization_meta.json"
+
+
+def _insolare_csv_path(project_name: str) -> Path:
+    return _outputs_dir(project_name) / "insolare_optimizer_summary.csv"
+
+
+def _insolare_meta_path(project_name: str) -> Path:
+    return _outputs_dir(project_name) / "insolare_optimizer_meta.json"
 
 
 def _load_saved_optimization_outputs(project_name: str) -> tuple[pd.DataFrame | None, dict | None]:
@@ -210,18 +222,33 @@ set_active_project_folder_name(selected_project)
 
 currency_symbol = _get_currency_symbol(selected_project)
 
-c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.0, 1.0])
+# ── Mode selector ────────────────────────────────────────────
+view_mode = st.radio(
+    "Optimizer mode",
+    options=["Search Space", "InSolare Optimizer"],
+    horizontal=True,
+    help=(
+        "Search Space: simulates all predefined discrete component options (fast, limited).\n"
+        "InSolare Optimizer: continuous search via Differential Evolution — finds globally "
+        "optimal sizing without predefined options (~5–10 min)."
+    ),
+)
+
+c1, c2, c3, c4, c5 = st.columns([1.3, 1.5, 1.2, 1.0, 1.0])
 
 with c1:
-    run_optimization = st.button("Run Optimization", use_container_width=True)
+    run_search_space = st.button("Run Search Space", use_container_width=True)
 
 with c2:
-    load_saved = st.button("Load Saved Optimization Outputs", use_container_width=True)
+    run_insolare = st.button("Run InSolare Optimizer", use_container_width=True, type="primary")
 
 with c3:
-    feasible_only = st.checkbox("Feasible Only", value=True)
+    load_saved = st.button("Load Saved Outputs", use_container_width=True)
 
 with c4:
+    feasible_only = st.checkbox("Feasible Only", value=True)
+
+with c5:
     successful_only = st.checkbox("Successful Runs Only", value=True)
 
 top_n = st.slider("Number of rows to show", min_value=5, max_value=100, value=10, step=5)
@@ -233,8 +260,8 @@ run_status = None
 # ============================================================
 # RUN / LOAD
 # ============================================================
-if run_optimization:
-    progress_bar = st.progress(0.0, text="Starting optimization…")
+if run_search_space:
+    progress_bar = st.progress(0.0, text="Starting Search Space optimization…")
     status_text  = st.empty()
 
     def _on_progress(done: int, total: int) -> None:
@@ -247,7 +274,7 @@ if run_optimization:
         save_outputs=True,
         progress_callback=_on_progress,
     )
-    progress_bar.progress(1.0, text="Optimization complete!")
+    progress_bar.progress(1.0, text="Search Space optimization complete!")
     status_text.empty()
 
     optimization_df = result.to_dataframe()
@@ -262,33 +289,82 @@ if run_optimization:
         "failed_runs": sum(1 for x in result.candidate_results if not x.run_success),
         "feasible_candidates": sum(1 for x in result.candidate_results if x.is_feasible),
     }
-    run_status = "fresh"
+    run_status = "fresh_search_space"
+
+elif run_insolare:
+    st.info(
+        "InSolare Optimizer running — this takes ~5–10 minutes depending on CPU cores. "
+        "Bounds and infeasibility floor are auto-derived from this project's load and components."
+    )
+    progress_bar = st.progress(0.0, text="Starting InSolare Optimizer…")
+    status_text  = st.empty()
+
+    def _on_insolare_progress(gen: int, maxiter: int, convergence: float) -> None:
+        pct = min(gen / maxiter, 1.0)
+        progress_bar.progress(
+            pct,
+            text=f"Generation {gen}/{maxiter} — convergence {convergence:.3f}",
+        )
+        status_text.caption(f"Gen {gen}/{maxiter} complete — population convergence: {convergence:.4f}")
+
+    insolare_result = run_insolare_optimizer(
+        project_name=selected_project,
+        save_outputs=True,
+        progress_callback=_on_insolare_progress,
+    )
+    progress_bar.progress(1.0, text="InSolare Optimizer complete!")
+    status_text.empty()
+
+    optimization_df, optimization_meta = load_insolare_optimizer_outputs(selected_project)
+    run_status = "fresh_insolare"
 
 elif load_saved:
-    optimization_df, optimization_meta = _load_saved_optimization_outputs(selected_project)
+    if view_mode == "InSolare Optimizer":
+        optimization_df, optimization_meta = load_insolare_optimizer_outputs(selected_project)
+    else:
+        optimization_df, optimization_meta = _load_saved_optimization_outputs(selected_project)
     run_status = "saved"
 
 else:
-    optimization_df, optimization_meta = _load_saved_optimization_outputs(selected_project)
+    # Auto-load based on selected view mode
+    if view_mode == "InSolare Optimizer":
+        optimization_df, optimization_meta = load_insolare_optimizer_outputs(selected_project)
+    else:
+        optimization_df, optimization_meta = _load_saved_optimization_outputs(selected_project)
     run_status = "auto"
 
 if optimization_df is None or optimization_df.empty:
-    st.info("No optimization outputs found yet. Click 'Run Optimization' to generate results.")
+    if view_mode == "InSolare Optimizer":
+        st.info("No InSolare Optimizer outputs found. Click 'Run InSolare Optimizer' to generate results.")
+    else:
+        st.info("No optimization outputs found yet. Click 'Run Search Space' to generate results.")
     st.stop()
 
 optimization_df = _prepare_display_df(optimization_df)
 
-if run_status == "fresh":
-    st.success("Optimization completed and outputs saved.")
+if run_status == "fresh_search_space":
+    st.success("Search Space optimization completed and outputs saved.")
+elif run_status == "fresh_insolare":
+    insolare_d = optimization_meta.get("optimal_design", {}) if optimization_meta else {}
+    st.success(
+        f"InSolare Optimizer complete — "
+        f"PV {insolare_d.get('pv_capacity_kw', 0):,.0f} kW / "
+        f"{insolare_d.get('battery_quantity', 0)} strings / "
+        f"{insolare_d.get('wind_quantity', 0)} wind — "
+        f"NPC {currency_symbol} {optimization_meta.get('optimal_npc', 0):,.0f}"
+        if optimization_meta else "InSolare Optimizer complete."
+    )
 elif run_status == "saved":
-    st.success("Loaded saved optimization outputs.")
+    st.success(f"Loaded saved {view_mode} outputs.")
 else:
-    st.info("Showing latest saved optimization outputs.")
+    mode_label = "InSolare Optimizer" if view_mode == "InSolare Optimizer" else "Search Space"
+    st.info(f"Showing latest saved {mode_label} outputs.")
 
 # ============================================================
 # SUMMARY CARDS
 # ============================================================
-st.subheader("Optimization Summary")
+mode_badge = "🔵 InSolare Optimizer" if view_mode == "InSolare Optimizer" else "⬜ Search Space"
+st.subheader(f"Optimization Summary — {mode_badge}")
 
 s1, s2, s3, s4, s5, s6 = st.columns(6)
 
@@ -340,6 +416,8 @@ display_columns = [
         "converter_capacity_kw",
         "is_feasible",
         "annual_capacity_shortage_pct",
+        "total_capacity_shortage_kwh",
+        "total_reserve_shortfall_kwh",
         "renewable_fraction_pct",
         "net_present_cost",
         "levelized_cost_of_energy",
@@ -399,10 +477,11 @@ with detail_right:
     d5.metric("Annualized Total Cost", f"{currency_symbol} {_safe_float(selected_row.get('annualized_total_cost')):,.2f}")
     d6.metric("Direct Capital Cost", f"{currency_symbol} {_safe_float(selected_row.get('direct_capital_cost')):,.2f}")
 
-extra1, extra2, extra3 = st.columns(3)
+extra1, extra2, extra3, extra4 = st.columns(4)
 extra1.metric("Annual Grid Net Cost", f"{currency_symbol} {_safe_float(selected_row.get('annual_grid_net_cost')):,.2f}")
-extra2.metric("Reserve Shortfall Hours", f"{_safe_int(selected_row.get('reserve_shortfall_hours')):,}")
-extra3.metric("Run Success", str(_safe_bool(selected_row.get('run_success'))))
+extra2.metric("Capacity Shortage", f"{_safe_float(selected_row.get('total_capacity_shortage_kwh')):,.1f} kWh")
+extra3.metric("Reserve Shortfall", f"{_safe_float(selected_row.get('total_reserve_shortfall_kwh')):,.1f} kWh")
+extra4.metric("Run Success", str(_safe_bool(selected_row.get('run_success'))))
 
 # ============================================================
 # SEND TO RESULTS PAGE

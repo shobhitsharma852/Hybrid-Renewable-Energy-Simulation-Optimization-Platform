@@ -121,12 +121,19 @@ def _read_ui(state: State, key: str) -> Any:
     return state[f"ui_{key}"]
 
 
+def _read_ui_default(state: State, key: str, default: Any) -> Any:
+    return state.get(f"ui_{key}", default)
+
+
 def write_component_to_ui(state: State, selected_component: str, component_data: dict, force: bool = False) -> None:
     if selected_component == "PV":
         pv = component_data
         _set_ui(state, "pv_enabled", pv["enabled"], force)
         _set_ui(state, "pv_use_search_space", pv["use_search_space"], force)
         _set_ui(state, "pv_capacity_kw_options_text", format_float_list(pv["capacity_kw_options"]), force)
+        _set_ui(state, "pv_optimizer_kw_min", pv.get("optimizer_kw_min", 0.0), force)
+        _set_ui(state, "pv_optimizer_kw_max", pv.get("optimizer_kw_max", 15000.0), force)
+        _set_ui(state, "pv_optimizer_set_limits", pv.get("optimizer_set_limits", False), force)
         _set_ui(state, "pv_capital_cost_per_kw", pv["capital_cost_per_kw"], force)
         _set_ui(state, "pv_replacement_cost_per_kw", pv["replacement_cost_per_kw"], force)
         _set_ui(state, "pv_om_cost_per_kw_per_year", pv["om_cost_per_kw_per_year"], force)
@@ -165,6 +172,9 @@ def write_component_to_ui(state: State, selected_component: str, component_data:
         wind = component_data
         _set_ui(state, "wind_enabled", wind["enabled"], force)
         _set_ui(state, "wind_use_search_space", wind["use_search_space"], force)
+        _set_ui(state, "wind_optimizer_qty_min", wind.get("optimizer_qty_min", 0), force)
+        _set_ui(state, "wind_optimizer_qty_max", wind.get("optimizer_qty_max", 4), force)
+        _set_ui(state, "wind_optimizer_set_limits", wind.get("optimizer_set_limits", False), force)
         _set_ui(state, "wind_turbine_model_name", wind["turbine_model_name"], force)
         _set_ui(state, "wind_rated_capacity_kw", wind["rated_capacity_kw"], force)
         _set_ui(state, "wind_quantity_options_text", format_int_list(wind["quantity_options"]), force)
@@ -197,6 +207,9 @@ def write_component_to_ui(state: State, selected_component: str, component_data:
         battery = component_data
         _set_ui(state, "battery_enabled", battery["enabled"], force)
         _set_ui(state, "battery_use_search_space", battery["use_search_space"], force)
+        _set_ui(state, "battery_optimizer_qty_min", battery.get("optimizer_qty_min", 0), force)
+        _set_ui(state, "battery_optimizer_qty_max", battery.get("optimizer_qty_max", 40), force)
+        _set_ui(state, "battery_optimizer_set_limits", battery.get("optimizer_set_limits", False), force)
         _set_ui(state, "battery_model_name", battery["battery_model_name"], force)
         _set_ui(state, "battery_quantity_options_text", format_int_list(battery["quantity_options"]), force)
         _set_ui(state, "battery_nominal_voltage_v", battery["nominal_voltage_v"], force)
@@ -218,6 +231,9 @@ def write_component_to_ui(state: State, selected_component: str, component_data:
         converter = component_data
         _set_ui(state, "converter_enabled", converter["enabled"], force)
         _set_ui(state, "converter_use_search_space", converter["use_search_space"], force)
+        _set_ui(state, "converter_optimizer_kw_min", converter.get("optimizer_kw_min", 0.0), force)
+        _set_ui(state, "converter_optimizer_kw_max", converter.get("optimizer_kw_max", 6000.0), force)
+        _set_ui(state, "converter_optimizer_set_limits", converter.get("optimizer_set_limits", False), force)
         _set_ui(state, "converter_model_name", converter["converter_model_name"], force)
         _set_ui(state, "converter_capacity_kw_options_text", format_float_list(converter["capacity_kw_options"]), force)
         _set_ui(state, "converter_capital_cost_per_kw", converter["capital_cost_per_kw"], force)
@@ -284,6 +300,9 @@ def build_pv_from_state(state: State) -> dict:
         "enabled": bool(_read_ui(state, "pv_enabled")),
         "use_search_space": bool(_read_ui(state, "pv_use_search_space")),
         "capacity_kw_options": parse_float_list(_read_ui(state, "pv_capacity_kw_options_text")),
+        "optimizer_kw_min": float(_read_ui_default(state, "pv_optimizer_kw_min", 0.0)),
+        "optimizer_kw_max": float(_read_ui_default(state, "pv_optimizer_kw_max", 15000.0)),
+        "optimizer_set_limits": bool(_read_ui_default(state, "pv_optimizer_set_limits", False)),
         "capital_cost_per_kw": float(_read_ui(state, "pv_capital_cost_per_kw")),
         "replacement_cost_per_kw": float(_read_ui(state, "pv_replacement_cost_per_kw")),
         "om_cost_per_kw_per_year": float(_read_ui(state, "pv_om_cost_per_kw_per_year")),
@@ -323,6 +342,9 @@ def build_wind_from_state(state: State) -> dict:
     return {
         "enabled": bool(_read_ui(state, "wind_enabled")),
         "use_search_space": bool(_read_ui(state, "wind_use_search_space")),
+        "optimizer_qty_min": int(_read_ui_default(state, "wind_optimizer_qty_min", 0)),
+        "optimizer_qty_max": int(_read_ui_default(state, "wind_optimizer_qty_max", 4)),
+        "optimizer_set_limits": bool(_read_ui_default(state, "wind_optimizer_set_limits", False)),
         "turbine_model_name": str(_read_ui(state, "wind_turbine_model_name")),
         "rated_capacity_kw": float(_read_ui(state, "wind_rated_capacity_kw")),
         "quantity_options": parse_int_list(_read_ui(state, "wind_quantity_options_text")),
@@ -358,6 +380,9 @@ def build_battery_from_state(state: State) -> dict:
     return {
         "enabled": bool(_read_ui(state, "battery_enabled")),
         "use_search_space": bool(_read_ui(state, "battery_use_search_space")),
+        "optimizer_qty_min": int(_read_ui_default(state, "battery_optimizer_qty_min", 0)),
+        "optimizer_qty_max": int(_read_ui_default(state, "battery_optimizer_qty_max", 40)),
+        "optimizer_set_limits": bool(_read_ui_default(state, "battery_optimizer_set_limits", False)),
         "battery_model_name": str(_read_ui(state, "battery_model_name")),
         "quantity_options": parse_int_list(_read_ui(state, "battery_quantity_options_text")),
         "nominal_voltage_v": float(_read_ui(state, "battery_nominal_voltage_v")),
@@ -380,6 +405,9 @@ def build_converter_from_state(state: State) -> dict:
     return {
         "enabled": bool(_read_ui(state, "converter_enabled")),
         "use_search_space": bool(_read_ui(state, "converter_use_search_space")),
+        "optimizer_kw_min": float(_read_ui_default(state, "converter_optimizer_kw_min", 0.0)),
+        "optimizer_kw_max": float(_read_ui_default(state, "converter_optimizer_kw_max", 6000.0)),
+        "optimizer_set_limits": bool(_read_ui_default(state, "converter_optimizer_set_limits", False)),
         "converter_model_name": str(_read_ui(state, "converter_model_name")),
         "capacity_kw_options": parse_float_list(_read_ui(state, "converter_capacity_kw_options_text")),
         "capital_cost_per_kw": float(_read_ui(state, "converter_capital_cost_per_kw")),

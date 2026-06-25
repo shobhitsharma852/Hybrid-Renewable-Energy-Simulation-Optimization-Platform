@@ -64,6 +64,11 @@ class ConverterComponentConfig:
     # Example: [0, 1000, 2000, 3000, 4000, 5000]
     capacity_kw_options: list[float] = field(default_factory=lambda: [0.0, 1000.0])
 
+    # InSolare Optimizer bounds (active when use_search_space=False and optimizer_set_limits=True)
+    optimizer_kw_min: float = 0.0
+    optimizer_kw_max: float = 6000.0
+    optimizer_set_limits: bool = False
+
     # --------------------------------------------------------
     # ECONOMIC PARAMETERS
     # --------------------------------------------------------
@@ -138,6 +143,13 @@ def validate_converter_component(converter: ConverterComponentConfig) -> None:
         converter.capacity_kw_options,
         "Converter capacity_kw_options",
     )
+
+    if converter.optimizer_kw_min < 0 or converter.optimizer_kw_max < 0:
+        raise ValueError("Converter optimizer bounds must be >= 0")
+    if converter.optimizer_kw_min > converter.optimizer_kw_max:
+        raise ValueError(
+            "Converter optimizer_kw_min must be <= optimizer_kw_max"
+        )
 
     # --------------------------------------------------------
     # ECONOMIC PARAMETERS

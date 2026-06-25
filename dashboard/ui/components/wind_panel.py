@@ -55,11 +55,16 @@ def render_wind_component_panel(currency_symbol: str = "₹") -> None:
             key="ui_wind_enabled",
         )
 
-        use_search_space = st.checkbox(
-            "Use Search Space",
-            value=st.session_state.get("ui_wind_use_search_space", DEFAULT_WIND.use_search_space),
-            key="ui_wind_use_search_space",
+        _sizing_mode_idx = 0 if st.session_state.get("ui_wind_use_search_space", DEFAULT_WIND.use_search_space) else 1
+        _sizing_mode = st.radio(
+            "Sizing Mode",
+            ["Discrete Options", "InSolare Optimizer"],
+            index=_sizing_mode_idx,
+            horizontal=True,
+            key="ui_wind_sizing_mode",
         )
+        use_search_space = (_sizing_mode == "Discrete Options")
+        st.session_state["ui_wind_use_search_space"] = use_search_space
 
         turbine_model_name = st.text_input(
             "Turbine Model Name",
@@ -74,14 +79,43 @@ def render_wind_component_panel(currency_symbol: str = "₹") -> None:
             value=float(st.session_state.get("ui_wind_rated_capacity_kw", DEFAULT_WIND.rated_capacity_kw)),
         )
 
-        quantity_options_text = st.text_input(
-            "Quantity Search Space",
-            value=st.session_state.get(
-                "wind_quantity_options_text",
+        if use_search_space:
+            quantity_options_text = st.text_input(
+                "Quantity Options (# turbines)",
+                value=st.session_state.get(
+                    "ui_wind_quantity_options_text",
+                    ",".join(str(v) for v in DEFAULT_WIND.quantity_options),
+                ),
+                key="ui_wind_quantity_options_text",
+            )
+        else:
+            quantity_options_text = st.session_state.get(
+                "ui_wind_quantity_options_text",
                 ",".join(str(v) for v in DEFAULT_WIND.quantity_options),
-            ),
-            key="ui_wind_quantity_options_text",
-        )
+            )
+            set_limits = st.checkbox(
+                "Set Limits",
+                value=st.session_state.get("ui_wind_optimizer_set_limits", False),
+                key="ui_wind_optimizer_set_limits",
+            )
+            if set_limits:
+                _ol, _ou = st.columns(2)
+                with _ol:
+                    st.number_input(
+                        "Minimum (turbines)",
+                        min_value=0,
+                        value=int(st.session_state.get("ui_wind_optimizer_qty_min", 0)),
+                        step=1,
+                        key="ui_wind_optimizer_qty_min",
+                    )
+                with _ou:
+                    st.number_input(
+                        "Maximum (turbines)",
+                        min_value=0,
+                        value=int(st.session_state.get("ui_wind_optimizer_qty_max", 4)),
+                        step=1,
+                        key="ui_wind_optimizer_qty_max",
+                    )
 
         hub_height_m = formatted_number_input(
             "Hub Height (m)",

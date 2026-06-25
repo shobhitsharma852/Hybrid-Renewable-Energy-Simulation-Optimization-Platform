@@ -133,7 +133,6 @@
     "initial_state_of_charge_pct": 50.0,
     "minimum_state_of_charge_pct": 20.0,
     "throughput_kwh": 3000000.0,
-    "self_discharge_rate_pct_per_day": 0.05,
     "replacement_degradation_limit_pct": 20.0,
     "calendar_fade_pct_per_year": 0.0,
     "arrhenius_ea_ev": 0.0,

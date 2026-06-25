@@ -147,6 +147,11 @@ class PVComponentConfig:
     # Example: [0, 1000, 2000, 3000, 4000]
     capacity_kw_options: list[float] = field(default_factory=lambda: [0.0, 1000.0])
 
+    # InSolare Optimizer bounds (active when use_search_space=False and optimizer_set_limits=True)
+    optimizer_kw_min: float = 0.0
+    optimizer_kw_max: float = 15000.0
+    optimizer_set_limits: bool = False
+
     # Economic parameters
     capital_cost_per_kw: float = 2500.0
     replacement_cost_per_kw: float = 2500.0
@@ -253,6 +258,11 @@ def validate_pv_component(pv: PVComponentConfig) -> None:
     Validate the full PV component configuration.
     """
     _validate_non_negative_list(pv.capacity_kw_options, "PV capacity_kw_options")
+
+    if pv.optimizer_kw_min < 0 or pv.optimizer_kw_max < 0:
+        raise ValueError("PV optimizer bounds must be >= 0")
+    if pv.optimizer_kw_min > pv.optimizer_kw_max:
+        raise ValueError("PV optimizer_kw_min must be <= optimizer_kw_max")
 
     if pv.capital_cost_per_kw < 0:
         raise ValueError("PV capital_cost_per_kw cannot be negative")

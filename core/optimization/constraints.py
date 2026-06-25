@@ -31,10 +31,13 @@ class OptimizationConstraints:
 @dataclass(frozen=True)
 class ConstraintEvaluation:
     annual_capacity_shortage_pct: float
+    total_capacity_shortage_kwh: float
+    total_reserve_shortfall_kwh: float
     renewable_fraction_pct: float
 
     max_required_operating_reserve_kw: float
     min_available_operating_reserve_kw: float
+    max_reserve_shortfall_kw: float
     reserve_shortfall_hours: int
 
     passes_capacity_shortage: bool
@@ -139,18 +142,20 @@ def _evaluate_operating_reserve(
     design: DesignPoint,
     simulation_results,
     time_step_hours: float = 1.0,
-) -> tuple[bool, float, float, int]:
+) -> tuple[bool, float, float, float, float, int]:
     if not constraints.enforce_operating_reserve:
-        return True, 0.0, 0.0, 0
+        return True, 0.0, 0.0, 0.0, 0.0, 0
 
     hourly_records = simulation_results.hourly_records
     if not hourly_records:
-        return True, 0.0, 0.0, 0
+        return True, 0.0, 0.0, 0.0, 0.0, 0
 
     annual_peak_load_kw = max(float(r.load_kw) for r in hourly_records)
 
     max_required_reserve_kw = 0.0
     min_available_reserve_kw = float("inf")
+    max_reserve_shortfall_kw = 0.0
+    total_reserve_shortfall_kwh = 0.0
     reserve_shortfall_hours = 0
 
     for record in hourly_records:
@@ -172,11 +177,14 @@ def _evaluate_operating_reserve(
         )
 
         available_reserve_kw = grid_headroom_kw + battery_headroom_kw
+        reserve_shortfall_kw = max(0.0, required_reserve_kw - available_reserve_kw)
 
         max_required_reserve_kw = max(max_required_reserve_kw, required_reserve_kw)
         min_available_reserve_kw = min(min_available_reserve_kw, available_reserve_kw)
+        max_reserve_shortfall_kw = max(max_reserve_shortfall_kw, reserve_shortfall_kw)
+        total_reserve_shortfall_kwh += reserve_shortfall_kw * time_step_hours
 
-        if available_reserve_kw + EPSILON < required_reserve_kw:
+        if reserve_shortfall_kw > EPSILON:
             reserve_shortfall_hours += 1
 
     if min_available_reserve_kw == float("inf"):
@@ -188,6 +196,8 @@ def _evaluate_operating_reserve(
         passes_operating_reserve,
         max_required_reserve_kw,
         min_available_reserve_kw,
+        max_reserve_shortfall_kw,
+        total_reserve_shortfall_kwh,
         reserve_shortfall_hours,
     )
 
@@ -205,17 +215,7 @@ def evaluate_candidate_constraints(
     total_load_kwh = max(0.0, float(summary.total_load_kwh))
     total_unmet_load_kwh = max(0.0, float(summary.total_unmet_load_kwh))
 
-    annual_capacity_shortage_pct = (
-        (total_unmet_load_kwh / total_load_kwh) * 100.0
-        if total_load_kwh > EPSILON
-        else 0.0
-    )
-
     renewable_fraction_pct = max(0.0, float(summary.renewable_fraction) * 100.0)
-
-    passes_capacity_shortage = (
-        annual_capacity_shortage_pct <= constraints.max_annual_capacity_shortage_pct + EPSILON
-    )
 
     passes_renewable_fraction = (
         renewable_fraction_pct + EPSILON >= constraints.min_renewable_fraction_pct
@@ -225,6 +225,8 @@ def evaluate_candidate_constraints(
         passes_operating_reserve,
         max_required_operating_reserve_kw,
         min_available_operating_reserve_kw,
+        max_reserve_shortfall_kw,
+        total_reserve_shortfall_kwh,
         reserve_shortfall_hours,
     ) = _evaluate_operating_reserve(
         constraints=constraints,
@@ -232,6 +234,23 @@ def evaluate_candidate_constraints(
         design=design,
         simulation_results=simulation_results,
         time_step_hours=time_step_hours,
+    )
+
+    # HOMER defines total capacity shortage as unmet load plus any shortfall
+    # between required and available operating reserve. With all reserve
+    # percentages set to zero, this reduces exactly to total unmet load.
+    total_capacity_shortage_kwh = (
+        total_unmet_load_kwh + total_reserve_shortfall_kwh
+    )
+    annual_capacity_shortage_pct = (
+        (total_capacity_shortage_kwh / total_load_kwh) * 100.0
+        if total_load_kwh > EPSILON
+        else 0.0
+    )
+
+    passes_capacity_shortage = (
+        annual_capacity_shortage_pct
+        <= constraints.max_annual_capacity_shortage_pct + EPSILON
     )
 
     failure_reasons: list[str] = []
@@ -253,9 +272,12 @@ def evaluate_candidate_constraints(
 
     return ConstraintEvaluation(
         annual_capacity_shortage_pct=annual_capacity_shortage_pct,
+        total_capacity_shortage_kwh=total_capacity_shortage_kwh,
+        total_reserve_shortfall_kwh=total_reserve_shortfall_kwh,
         renewable_fraction_pct=renewable_fraction_pct,
         max_required_operating_reserve_kw=max_required_operating_reserve_kw,
         min_available_operating_reserve_kw=min_available_operating_reserve_kw,
+        max_reserve_shortfall_kw=max_reserve_shortfall_kw,
         reserve_shortfall_hours=reserve_shortfall_hours,
         passes_capacity_shortage=passes_capacity_shortage,
         passes_renewable_fraction=passes_renewable_fraction,

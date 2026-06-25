@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .battery_soc import BatteryState, compute_self_discharge_loss, update_battery_state
+from .battery_soc import BatteryState, update_battery_state
 from .converter_model import (
     convert_ac_to_dc,
     convert_dc_to_ac,
@@ -80,9 +80,11 @@ class DispatchResult:
     # Contains: soc_pct, effective_capacity_kwh, cumulative_throughput_kwh, soh_pct.
     updated_battery_state: BatteryState
 
-    # Passive energy lost to self-discharge this step (kWh, not kW —
-    # self-discharge happens once per step regardless of step length).
-    self_discharge_loss_kwh: float = 0.0
+    # Explicit converter flows for accurate HOMER-style reporting.
+    inverter_input_dc_kw: float = 0.0
+    inverter_output_ac_kw: float = 0.0
+    rectifier_input_ac_kw: float = 0.0
+    rectifier_output_dc_kw: float = 0.0
 
 
 # ============================================================
@@ -343,23 +345,6 @@ def run_dispatch_step(
     )
     grid_limits = resolve_grid_limits(grid_config)
 
-    # --- SELF-DISCHARGE ---
-    # Applied BEFORE charge/discharge so all subsequent logic sees the
-    # already-reduced SOC. This happens every timestep regardless of
-    # whether the battery charges or discharges.
-    # Reference: HOMER Pro — self-discharge is applied at the start of each step.
-    self_discharge_loss_kwh = 0.0
-    if battery_enabled:
-        battery_soc_pct, self_discharge_loss_kwh = compute_self_discharge_loss(
-            current_soc_pct=battery_soc_pct,
-            total_capacity_kwh=effective_capacity_kwh,  # from BatteryState, not from config
-            minimum_soc_pct=float(_safe_getattr(battery_config, "minimum_state_of_charge_pct", 0.0)),
-            self_discharge_rate_pct_per_day=float(
-                _safe_getattr(battery_config, "self_discharge_rate_pct_per_day", 0.0)
-            ),
-            time_step_hours=time_step_hours,
-        )
-
     # --- SHARED CONVERTER BUDGETS FOR THIS TIMESTEP ---
     # Each converter path (PV→load, battery→load, wind→battery) draws from
     # the same physical inverter/rectifier capacity. remaining_* tracks what
@@ -376,6 +361,10 @@ def run_dispatch_step(
     # Accumulators — start at zero, filled in by each dispatch step below.
     inverter_loss_kw = 0.0
     rectifier_loss_kw = 0.0
+    inverter_input_dc_kw = 0.0
+    inverter_output_ac_kw = 0.0
+    rectifier_input_ac_kw = 0.0
+    rectifier_output_dc_kw = 0.0
 
     battery_charge_kw = 0.0
     battery_discharge_kw = 0.0
@@ -436,6 +425,8 @@ def run_dispatch_step(
             remaining_load_kw -= pv_to_load_ac_kw
             remaining_pv_dc_kw -= inv_result.input_power_kw
             inverter_loss_kw += inv_result.loss_kw
+            inverter_input_dc_kw += inv_result.input_power_kw
+            inverter_output_ac_kw += inv_result.output_power_kw
             # Deduct used inverter capacity so subsequent steps see the remainder.
             remaining_inverter_ac_capacity_kw = max(
                 0.0,
@@ -508,6 +499,8 @@ def run_dispatch_step(
             renewable_charge_stored_kwh += stored_delta_kwh
             remaining_wind_ac_kw -= rect_result.input_power_kw
             rectifier_loss_kw += rect_result.loss_kw
+            rectifier_input_ac_kw += rect_result.input_power_kw
+            rectifier_output_dc_kw += actual_charge_dc_kw
             remaining_rectifier_ac_capacity_kw = max(
                 0.0,
                 remaining_rectifier_ac_capacity_kw - rect_result.input_power_kw,
@@ -581,6 +574,8 @@ def run_dispatch_step(
                 battery_discharge_kw += inv_result.output_power_kw
                 remaining_load_kw -= inv_result.output_power_kw
                 inverter_loss_kw += inv_result.loss_kw
+                inverter_input_dc_kw += inv_result.input_power_kw
+                inverter_output_ac_kw += inv_result.output_power_kw
                 remaining_inverter_ac_capacity_kw = max(
                     0.0,
                     remaining_inverter_ac_capacity_kw - inv_result.output_power_kw,
@@ -601,6 +596,8 @@ def run_dispatch_step(
         )
         pv_surplus_ac_equivalent_kw = pv_export_result.output_power_kw
         inverter_loss_kw += pv_export_result.loss_kw
+        inverter_input_dc_kw += pv_export_result.input_power_kw
+        inverter_output_ac_kw += pv_export_result.output_power_kw
         # Any DC that could not pass through the inverter is curtailed.
         pv_curtailed_dc_kw = pv_export_result.clipped_power_kw
         remaining_pv_dc_kw -= pv_export_result.input_power_kw
@@ -673,5 +670,8 @@ def run_dispatch_step(
         inverter_loss_kw=inverter_loss_kw,
         rectifier_loss_kw=rectifier_loss_kw,
         updated_battery_state=updated_battery_state,
-        self_discharge_loss_kwh=self_discharge_loss_kwh,
+        inverter_input_dc_kw=inverter_input_dc_kw,
+        inverter_output_ac_kw=inverter_output_ac_kw,
+        rectifier_input_ac_kw=rectifier_input_ac_kw,
+        rectifier_output_dc_kw=rectifier_output_dc_kw,
     )

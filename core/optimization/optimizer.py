@@ -50,9 +50,12 @@ class CandidateSimulationResult:
     gross_renewable_fraction: float = 0.0
 
     annual_capacity_shortage_pct: float = 0.0
+    total_capacity_shortage_kwh: float = 0.0
+    total_reserve_shortfall_kwh: float = 0.0
     renewable_fraction_pct: float = 0.0
     max_required_operating_reserve_kw: float = 0.0
     min_available_operating_reserve_kw: float = 0.0
+    max_reserve_shortfall_kw: float = 0.0
     reserve_shortfall_hours: int = 0
 
     passes_capacity_shortage: bool = False
@@ -114,9 +117,12 @@ class OptimizationSweepResult:
                     "renewable_fraction": item.renewable_fraction,
                     "gross_renewable_fraction": item.gross_renewable_fraction,
                     "annual_capacity_shortage_pct": item.annual_capacity_shortage_pct,
+                    "total_capacity_shortage_kwh": item.total_capacity_shortage_kwh,
+                    "total_reserve_shortfall_kwh": item.total_reserve_shortfall_kwh,
                     "renewable_fraction_pct": item.renewable_fraction_pct,
                     "max_required_operating_reserve_kw": item.max_required_operating_reserve_kw,
                     "min_available_operating_reserve_kw": item.min_available_operating_reserve_kw,
+                    "max_reserve_shortfall_kw": item.max_reserve_shortfall_kw,
                     "reserve_shortfall_hours": item.reserve_shortfall_hours,
                     "passes_capacity_shortage": item.passes_capacity_shortage,
                     "passes_renewable_fraction": item.passes_renewable_fraction,
@@ -364,9 +370,12 @@ def _build_candidate_result(
         renewable_fraction=float(summary.renewable_fraction),
         gross_renewable_fraction=float(summary.gross_renewable_fraction),
         annual_capacity_shortage_pct=float(constraint_eval.annual_capacity_shortage_pct),
+        total_capacity_shortage_kwh=float(constraint_eval.total_capacity_shortage_kwh),
+        total_reserve_shortfall_kwh=float(constraint_eval.total_reserve_shortfall_kwh),
         renewable_fraction_pct=float(constraint_eval.renewable_fraction_pct),
         max_required_operating_reserve_kw=float(constraint_eval.max_required_operating_reserve_kw),
         min_available_operating_reserve_kw=float(constraint_eval.min_available_operating_reserve_kw),
+        max_reserve_shortfall_kw=float(constraint_eval.max_reserve_shortfall_kw),
         reserve_shortfall_hours=int(constraint_eval.reserve_shortfall_hours),
         passes_capacity_shortage=bool(constraint_eval.passes_capacity_shortage),
         passes_renewable_fraction=bool(constraint_eval.passes_renewable_fraction),

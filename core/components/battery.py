@@ -63,6 +63,11 @@ class BatteryComponentConfig:
     # Example: [0, 5, 10, 15, 20]
     quantity_options: list[int] = field(default_factory=lambda: [0, 5, 10])
 
+    # InSolare Optimizer bounds (active when use_search_space=False and optimizer_set_limits=True)
+    optimizer_qty_min: int = 0
+    optimizer_qty_max: int = 40
+    optimizer_set_limits: bool = False
+
     # --------------------------------------------------------
     # TECHNICAL PARAMETERS
     # --------------------------------------------------------
@@ -93,11 +98,6 @@ class BatteryComponentConfig:
 
     # Lifetime throughput (kWh)
     throughput_kwh: float = 3_000_000.0
-
-    # Self-discharge rate (% of stored energy lost per day when idle).
-    # Li-Ion typical: 0.05–0.1 %/day.  Lead-acid typical: 0.1–0.3 %/day.
-    # Reference: HOMER Pro Battery → Self-Discharge Rate parameter.
-    self_discharge_rate_pct_per_day: float = 0.05
 
     # --------------------------------------------------------
     # CAPACITY FADE PARAMETERS
@@ -285,6 +285,11 @@ def validate_battery_component(battery: BatteryComponentConfig) -> None:
         "Battery quantity_options",
     )
 
+    if battery.optimizer_qty_min < 0 or battery.optimizer_qty_max < 0:
+        raise ValueError("Battery optimizer bounds must be >= 0")
+    if battery.optimizer_qty_min > battery.optimizer_qty_max:
+        raise ValueError("Battery optimizer_qty_min must be <= optimizer_qty_max")
+
     # --------------------------------------------------------
     # TECHNICAL PARAMETERS
     # --------------------------------------------------------
@@ -319,9 +324,6 @@ def validate_battery_component(battery: BatteryComponentConfig) -> None:
 
     if battery.throughput_kwh < 0:
         raise ValueError("Battery throughput_kwh cannot be negative")
-
-    if not (0.0 <= battery.self_discharge_rate_pct_per_day <= 100.0):
-        raise ValueError("Battery self_discharge_rate_pct_per_day must be between 0 and 100")
 
     # Must be strictly less than 100 (a 100% degradation limit makes no physical sense)
     # and >= 0 (0 = degradation not modelled, no capacity fade applied).

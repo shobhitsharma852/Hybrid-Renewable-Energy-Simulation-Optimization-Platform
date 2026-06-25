@@ -337,7 +337,10 @@ class HybridSystemSimulator:
                     grid_export_kw=dispatch.grid_export_kw,
                     inverter_loss_kw=dispatch.inverter_loss_kw,
                     rectifier_loss_kw=dispatch.rectifier_loss_kw,
-                    self_discharge_loss_kwh=dispatch.self_discharge_loss_kwh,
+                    inverter_input_dc_kw=dispatch.inverter_input_dc_kw,
+                    inverter_output_ac_kw=dispatch.inverter_output_ac_kw,
+                    rectifier_input_ac_kw=dispatch.rectifier_input_ac_kw,
+                    rectifier_output_dc_kw=dispatch.rectifier_output_dc_kw,
                     # Battery health — taken from post-fade battery_state so the
                     # hourly DataFrame captures the degradation curve over the year.
                     # effective_capacity_kwh drifts down from nominal as SoH falls.
@@ -478,7 +481,10 @@ class HybridSystemSimulator:
             summary.total_battery_discharge_dc_kwh += r.battery_discharge_dc_kw * dt
             summary.total_inverter_loss_kwh += r.inverter_loss_kw * dt
             summary.total_rectifier_loss_kwh += r.rectifier_loss_kw * dt
-            summary.total_self_discharge_loss_kwh += r.self_discharge_loss_kwh
+            summary.total_inverter_input_kwh += r.inverter_input_dc_kw * dt
+            summary.total_inverter_output_kwh += r.inverter_output_ac_kw * dt
+            summary.total_rectifier_input_kwh += r.rectifier_input_ac_kw * dt
+            summary.total_rectifier_output_kwh += r.rectifier_output_dc_kw * dt
             # Throughput convention — verified against HOMER Pro "Annual Battery Throughput":
             #   (charge_DC + discharge_DC) / 2
             # Both sides measured at battery DC terminals (before inverter/rectifier).
@@ -495,11 +501,17 @@ class HybridSystemSimulator:
             ) / 2.0 * dt
 
         if summary.total_load_kwh > EPSILON:
-            summary.annual_capacity_shortage_pct = (
+            summary.unmet_load_fraction_pct = (
                 summary.total_unmet_load_kwh / summary.total_load_kwh
             ) * 100.0
         else:
-            summary.annual_capacity_shortage_pct = 0.0
+            summary.unmet_load_fraction_pct = 0.0
+
+        # The simulator itself has no project reserve constraints, so this
+        # baseline shortage equals unmet load. Project runs and optimization
+        # overwrite it with the full HOMER-style shortage after reserve checks.
+        summary.total_capacity_shortage_kwh = summary.total_unmet_load_kwh
+        summary.annual_capacity_shortage_pct = summary.unmet_load_fraction_pct
 
         if hourly_records:
             battery_soc_values = [float(r.battery_soc_pct) for r in hourly_records]

@@ -9,6 +9,10 @@ import pandas as pd
 from core.components.config import load_components
 from core.load import load_saved_load, resample_load_to_timestep, scale_load_to_annual_energy
 from core.optimization.design_point import DesignPoint
+from core.optimization.constraints import (
+    build_default_constraints_for_project,
+    evaluate_candidate_constraints,
+)
 from core.project import load_project
 from core.controller.config import DEFAULT_DISPATCH_STRATEGY
 from core.resources import resample_resources_to_timestep, validate_resources_dataframe
@@ -257,6 +261,31 @@ def run_project_simulation(
 
     simulator = HybridSystemSimulator(inputs)
     results = simulator.run()
+
+    # Apply the project's reserve settings before saving/reporting so annual
+    # capacity shortage follows HOMER's definition rather than unmet load alone.
+    constraint_evaluation = evaluate_candidate_constraints(
+        constraints=build_default_constraints_for_project(project_name),
+        components=inputs.components,
+        design=inputs.design,
+        simulation_results=results,
+        time_step_hours=inputs.time_step_hours,
+    )
+    results.summary.annual_capacity_shortage_pct = (
+        constraint_evaluation.annual_capacity_shortage_pct
+    )
+    results.summary.total_capacity_shortage_kwh = (
+        constraint_evaluation.total_capacity_shortage_kwh
+    )
+    results.summary.total_reserve_shortfall_kwh = (
+        constraint_evaluation.total_reserve_shortfall_kwh
+    )
+    results.summary.max_reserve_shortfall_kw = (
+        constraint_evaluation.max_reserve_shortfall_kw
+    )
+    results.summary.reserve_shortfall_hours = (
+        constraint_evaluation.reserve_shortfall_hours
+    )
 
     if save_outputs:
         save_simulation_outputs(project_name, results)
