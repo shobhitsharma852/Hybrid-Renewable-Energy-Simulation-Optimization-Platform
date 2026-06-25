@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "name": "semi_final_test",
+    "author": "Insolare",
+    "description": "Semi-final Indian scenario: Jodhpur/Barmer, Rajasthan. 1000 kW flat load, grid-connected hybrid PV-Wind-Battery.",
+    "currency_symbol": "$",
+    "currency_name": "USD"
+  },
+  "location": {
+    "lat": 25.2812,
+    "lon": 71.0524,
+    "timezone": "Asia/Kolkata"
+  },
+  "economics": {
+    "nominal_discount_rate_pct": 10.0,
+    "inflation_rate_pct": 6.0,
+    "project_lifetime_years": 25,
+    "annual_capacity_shortage": 0.0
+  },
+  "load": {
+    "scaled_annual_energy_kwh": null
+  },
+  "version": "1.0",
+  "simulation_time_step_minutes": 60,
+  "dispatch_strategy": "renewable_first"
+}
