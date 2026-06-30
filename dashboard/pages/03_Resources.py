@@ -15,6 +15,7 @@ from core.resources import (
     load_saved_resources,
     monthly_climatology,
     monthly_heatmap_table,
+    resample_resources_to_timestep,
     resources_file_path,
     save_resources,
     summarize_resources,
@@ -63,10 +64,275 @@ def _get_active_df() -> pd.DataFrame | None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# SCADA / measured-CSV upload helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+_GHI_COLS  = ["GHI_W", "RadiationHori_Avg", "ghi", "GHI", "GlobalHorizontalIrradiance"]
+_TEMP_COLS = ["AmbientTemperature", "AirTemperature_Avg", "temperature", "Temperature", "T2M"]
+_WIND_COLS = ["WindSpeed_Avg", "ws50m", "wind_speed", "WindSpeed", "WS50M", "WindSpeedAvg"]
+
+
+def _parse_uploaded_timestamp(df: pd.DataFrame) -> "pd.Series | None":
+    """Detect and parse timestamp from a SCADA or standard CSV.
+    Supports: combined 'Timestamp' col, separate 'Date'+'Time' cols, or 'timestamp'.
+    """
+    if "Timestamp" in df.columns:
+        return pd.to_datetime(df["Timestamp"], dayfirst=True, errors="coerce")
+    if "Date" in df.columns and "Time" in df.columns:
+        return pd.to_datetime(
+            df["Date"].astype(str).str.strip() + " " + df["Time"].astype(str).str.strip(),
+            dayfirst=True, errors="coerce",
+        )
+    if "timestamp" in df.columns:
+        return pd.to_datetime(df["timestamp"], errors="coerce")
+    return None
+
+
+def _first_match(df: pd.DataFrame, candidates: list) -> "str | None":
+    """Return first column name from candidates that exists in df."""
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def _aggregate_to_hourly(df: pd.DataFrame) -> pd.DataFrame:
+    """Floor all timestamps to the hour and take mean within each hour-bucket."""
+    df = df.copy()
+    df["_h"] = df["datetime"].dt.floor("h")
+    numeric = [c for c in df.columns if c not in ("datetime", "_h")
+               and pd.api.types.is_numeric_dtype(df[c])]
+    agg = df.groupby("_h")[numeric].mean().reset_index().rename(columns={"_h": "datetime"})
+    return agg
+
+
+def _show_resolution_info(datetimes: "pd.Series") -> float:
+    """Display detected timestep and return median step in minutes."""
+    diffs = datetimes.sort_values().diff().dropna()
+    if diffs.empty:
+        return 60.0
+    median_min = diffs.dt.total_seconds().median() / 60.0
+    st.caption(f"Detected resolution: **{median_min:.0f} min** · {len(datetimes):,} rows")
+    return median_min
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Solar upload section (GHI + Temperature)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _solar_upload_section() -> None:
+    """File upload for Solar resource — GHI and Temperature columns."""
+    uploaded = st.file_uploader(
+        "Upload Solar Resource CSV",
+        type=["csv"],
+        key="solar_csv_uploader",
+        help="Supports SCADA format (GHI_W, AmbientTemperature) or any CSV with GHI and temperature columns.",
+    )
+    if uploaded is None:
+        return
+
+    try:
+        raw = pd.read_csv(uploaded)
+    except Exception as e:
+        st.error(f"Could not read file: {e}")
+        return
+
+    ts = _parse_uploaded_timestamp(raw)
+    if ts is None:
+        st.error("Cannot detect timestamp. Expected 'Timestamp', 'Date'+'Time', or 'timestamp' column.")
+        return
+
+    all_cols = ["— (not in file)"] + list(raw.columns)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        default_ghi = _first_match(raw, _GHI_COLS)
+        ghi_sel = st.selectbox(
+            "GHI column (W/m²)",
+            options=all_cols,
+            index=all_cols.index(default_ghi) if default_ghi in all_cols else 0,
+            key="solar_ghi_sel",
+        )
+    with c2:
+        default_temp = _first_match(raw, _TEMP_COLS)
+        temp_sel = st.selectbox(
+            "Temperature column (°C)",
+            options=all_cols,
+            index=all_cols.index(default_temp) if default_temp in all_cols else 0,
+            key="solar_temp_sel",
+        )
+
+    if ghi_sel == "— (not in file)":
+        st.warning("Please select a GHI column to continue.")
+        return
+
+    work = pd.DataFrame({"datetime": ts})
+    work["ghi"] = pd.to_numeric(raw[ghi_sel], errors="coerce")
+    has_temp = temp_sel != "— (not in file)"
+    if has_temp:
+        work["temperature"] = pd.to_numeric(raw[temp_sel], errors="coerce")
+    work = work.dropna(subset=["datetime", "ghi"])
+
+    step_min = _show_resolution_info(work["datetime"])
+    if step_min < 55:
+        work = _aggregate_to_hourly(work)
+        st.caption(f"Aggregated to hourly: {len(work):,} rows")
+
+    work["ghi"] = work["ghi"].clip(lower=0.0)
+
+    preview_cols = {"datetime": "timestamp", "ghi": "ghi_wh_per_m2"}
+    if has_temp:
+        preview_cols["temperature"] = "temperature_c"
+    st.dataframe(work.rename(columns=preview_cols).head(10), use_container_width=True)
+
+    if not has_temp:
+        st.warning("No temperature column selected — temperature will default to 20 °C.")
+
+    if st.button("Import Solar Data", type="primary", use_container_width=True, key="btn_import_solar"):
+        work_ts = work.rename(columns={"datetime": "timestamp"})
+        work_ts["timestamp"] = pd.to_datetime(work_ts["timestamp"])
+
+        existing = _get_active_df()
+        if existing is not None:
+            ex = existing.copy()
+            ex["timestamp"] = pd.to_datetime(ex["timestamp"])
+            merged = ex.set_index("timestamp").copy()
+            solar_idx = work_ts.set_index("timestamp")
+            merged["ghi"] = solar_idx["ghi"].reindex(merged.index)
+            if has_temp:
+                merged["temperature"] = solar_idx["temperature"].reindex(merged.index)
+
+            if merged["ghi"].isna().all():
+                # No timestamp overlap — replace entire dataset
+                st.warning("Timestamps don't overlap with existing data. Replacing dataset (ws50m set to 0).")
+                work_ts["ws50m"] = 0.0
+                if not has_temp:
+                    work_ts["temperature"] = 20.0
+                st.session_state.current_resources_df = work_ts
+            else:
+                merged["ghi"] = merged["ghi"].fillna(0.0).clip(lower=0.0)
+                if has_temp:
+                    merged["temperature"] = merged["temperature"].fillna(merged["temperature"].mean())
+                st.session_state.current_resources_df = merged.reset_index()
+        else:
+            work_ts["ws50m"] = 0.0
+            if not has_temp:
+                work_ts["temperature"] = 20.0
+            st.session_state.current_resources_df = work_ts
+
+        st.success("Solar data imported. Scroll down to review the overview.")
+        st.rerun()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Wind upload section (Wind Speed → ws50m)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _wind_upload_section() -> None:
+    """File upload for Wind resource — wind speed with power-law height correction to 50 m."""
+    uploaded = st.file_uploader(
+        "Upload Wind Resource CSV",
+        type=["csv"],
+        key="wind_csv_uploader",
+        help="Supports SCADA format (WindSpeed_Avg) or any CSV with a wind speed column.",
+    )
+    if uploaded is None:
+        return
+
+    try:
+        raw = pd.read_csv(uploaded)
+    except Exception as e:
+        st.error(f"Could not read file: {e}")
+        return
+
+    ts = _parse_uploaded_timestamp(raw)
+    if ts is None:
+        st.error("Cannot detect timestamp. Expected 'Timestamp', 'Date'+'Time', or 'timestamp' column.")
+        return
+
+    all_cols = ["— (not in file)"] + list(raw.columns)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        default_ws = _first_match(raw, _WIND_COLS)
+        ws_sel = st.selectbox(
+            "Wind speed column (m/s)",
+            options=all_cols,
+            index=all_cols.index(default_ws) if default_ws in all_cols else 0,
+            key="wind_ws_sel",
+        )
+    with c2:
+        sensor_h = st.number_input(
+            "Anemometer height (m)",
+            min_value=1.0, max_value=200.0, value=10.0, step=1.0,
+            key="wind_sensor_height",
+            help="Height of wind sensor. Power law (α=0.14) extrapolates to 50 m.",
+        )
+
+    if ws_sel == "— (not in file)":
+        st.warning("Please select a wind speed column to continue.")
+        return
+
+    work = pd.DataFrame({"datetime": ts})
+    work["ws_raw"] = pd.to_numeric(raw[ws_sel], errors="coerce")
+    work = work.dropna(subset=["datetime", "ws_raw"])
+
+    step_min = _show_resolution_info(work["datetime"])
+    if step_min < 55:
+        work = _aggregate_to_hourly(work)
+        st.caption(f"Aggregated to hourly: {len(work):,} rows")
+
+    # Power law height correction: ws50m = ws_h × (50/h)^0.14
+    alpha = 0.14
+    correction = (50.0 / sensor_h) ** alpha
+    work["ws50m"] = (work["ws_raw"] * correction).clip(lower=0.0).round(4)
+
+    if abs(sensor_h - 50.0) > 0.5:
+        st.info(
+            f"Power law correction: ws50m = ws{sensor_h:.0f}m × (50 ÷ {sensor_h:.0f})^{alpha} "
+            f"= ws × **{correction:.4f}**"
+        )
+
+    st.dataframe(
+        work[["datetime", "ws_raw", "ws50m"]].head(10).rename(columns={"datetime": "timestamp"}),
+        use_container_width=True,
+    )
+
+    if st.button("Import Wind Data", type="primary", use_container_width=True, key="btn_import_wind"):
+        existing = _get_active_df()
+        if existing is None:
+            st.warning("Load Solar data first (NASA or upload) before importing wind.")
+            return
+
+        work_ts = work[["datetime", "ws50m"]].rename(columns={"datetime": "timestamp"})
+        work_ts["timestamp"] = pd.to_datetime(work_ts["timestamp"])
+
+        ex = existing.copy()
+        ex["timestamp"] = pd.to_datetime(ex["timestamp"])
+        merged = ex.set_index("timestamp").copy()
+        ws_idx = work_ts.set_index("timestamp")
+        merged["ws50m"] = ws_idx["ws50m"].reindex(merged.index)
+
+        if merged["ws50m"].isna().all():
+            mean_ws = float(work_ts["ws50m"].mean())
+            st.warning(
+                f"Timestamps don't overlap with existing data. "
+                f"Filling ws50m with dataset mean: {mean_ws:.3f} m/s."
+            )
+            merged["ws50m"] = mean_ws
+        else:
+            merged["ws50m"] = merged["ws50m"].fillna(0.0).clip(lower=0.0)
+
+        st.session_state.current_resources_df = merged.reset_index()
+        st.success("Wind data imported. Scroll down to review the overview.")
+        st.rerun()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Section 4 helper — Simulation-ready exports + PV/Wind monthly tables + charts
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _show_homer_export_section(df: pd.DataFrame) -> None:
+def _show_homer_export_section(df: pd.DataFrame, ts_minutes: int = 60) -> None:
     """
     Three simulation-ready download buttons and monthly summary tables/charts
     for validating resource data before running a simulation.
@@ -171,11 +437,31 @@ def _show_homer_export_section(df: pd.DataFrame) -> None:
     avg_grp = pd.DataFrame(ref_rows)
     ref_ts = pd.date_range("2001-01-01", periods=8760, freq="h")
     avg_year_ok = len(avg_grp) == 8760
-    if avg_year_ok:
-        avg_grp["ref_ts"] = ref_ts.strftime("%Y-%m-%d %H:%M")
+
+    # Resample average year to project timestep if not hourly
+    if avg_year_ok and ts_minutes != 60:
+        _avg_resample_df = pd.DataFrame({
+            "timestamp":   ref_ts,
+            "ghi":         avg_grp["ghi_avg"].values,
+            "ws50m":       avg_grp["ws50m_avg"].values,
+            "temperature": avg_grp["temp_avg"].values,
+        })
+        _avg_resampled = resample_resources_to_timestep(_avg_resample_df, ts_minutes)
+        export_ts  = _avg_resampled["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
+        export_ghi = _avg_resampled["ghi"]
+        export_ws  = _avg_resampled["ws50m"]
+        export_tmp = _avg_resampled["temperature"]
+        export_rows = len(_avg_resampled)
+    else:
+        export_ts  = ref_ts.strftime("%Y-%m-%d %H:%M") if avg_year_ok else df["_ts"].dt.strftime("%Y-%m-%d %H:%M")
+        export_ghi = avg_grp["ghi_avg"]   if avg_year_ok else df["ghi"]
+        export_ws  = avg_grp["ws50m_avg"] if avg_year_ok else df["ws50m"]
+        export_tmp = avg_grp["temp_avg"]  if avg_year_ok else df["temperature"]
+        export_rows = 8760 if avg_year_ok else len(df)
 
     n_years = year_max - year_min + 1
     avg_label = f"{years_label} avg" if n_years > 1 else str(year_min)
+    rows_label = f"{export_rows:,} rows ({avg_label})"
 
     c1, c2, c3 = st.columns(3)
 
@@ -191,22 +477,10 @@ def _show_homer_export_section(df: pd.DataFrame) -> None:
         st.caption("Original hourly data — GHI in Wh/m², wind in m/s, temp in °C")
 
     with c2:
-        if avg_year_ok:
-            pv_csv = pd.DataFrame({
-                "timestamp":      avg_grp["ref_ts"],
-                "ghi_kwh_per_m2": (avg_grp["ghi_avg"] / 1000.0).round(6),
-            })
-            solar_caption = (
-                f"8,760 rows ({avg_label})  |  GHI in kWh/m²  |  "
-                "HOMER Pro: Resources → Solar GHI"
-            )
-        else:
-            # Fallback to raw export if groupby row count is unexpected
-            pv_csv = pd.DataFrame({
-                "timestamp":      df["_ts"].dt.strftime("%Y-%m-%d %H:%M"),
-                "ghi_kwh_per_m2": (df["ghi"] / 1000.0).round(6),
-            })
-            solar_caption = "GHI / 1000 → kWh/m²  |  timestamp: yyyy-mm-dd hh:mm"
+        pv_csv = pd.DataFrame({
+            "timestamp":      export_ts,
+            "ghi_kwh_per_m2": (export_ghi / 1000.0).round(6),
+        })
         st.download_button(
             "Download Solar CSV  (kWh/m²)",
             data=pv_csv.to_csv(index=False).encode("utf-8"),
@@ -214,24 +488,13 @@ def _show_homer_export_section(df: pd.DataFrame) -> None:
             mime="text/csv",
             use_container_width=True,
         )
-        st.caption(solar_caption)
+        st.caption(f"{rows_label}  |  GHI in kWh/m²  |  HOMER Pro: Resources → Solar GHI")
 
     with c3:
-        if avg_year_ok:
-            wind_csv = pd.DataFrame({
-                "timestamp":      avg_grp["ref_ts"],
-                "wind_speed_mps": avg_grp["ws50m_avg"].round(4),
-            })
-            wind_caption = (
-                f"8,760 rows ({avg_label})  |  wind speed in m/s  |  "
-                "HOMER Pro: Resources → Wind (anemometer height = 50 m)"
-            )
-        else:
-            wind_csv = pd.DataFrame({
-                "timestamp":      df["_ts"].dt.strftime("%Y-%m-%d %H:%M"),
-                "wind_speed_mps": df["ws50m"].round(4),
-            })
-            wind_caption = "Wind speed in m/s  |  timestamp: yyyy-mm-dd hh:mm"
+        wind_csv = pd.DataFrame({
+            "timestamp":      export_ts,
+            "wind_speed_mps": export_ws.round(4),
+        })
         st.download_button(
             "Download Wind CSV  (m/s)",
             data=wind_csv.to_csv(index=False).encode("utf-8"),
@@ -239,26 +502,19 @@ def _show_homer_export_section(df: pd.DataFrame) -> None:
             mime="text/csv",
             use_container_width=True,
         )
-        st.caption(wind_caption)
+        st.caption(f"{rows_label}  |  wind speed in m/s  |  HOMER Pro: Resources → Wind (anemometer height = 50 m)")
 
     # ── Temperature CSV (HOMER: Resources → Temperature) ─────────────────────
     t1, t2, t3 = st.columns([1, 1, 1])
     with t1:
-        if avg_year_ok:
-            temp_csv = pd.DataFrame({
-                "timestamp":     avg_grp["ref_ts"],
-                "temperature_c": avg_grp["temp_avg"].round(3),
-            })
-            temp_caption = (
-                f"8,760 rows ({avg_label})  |  ambient temperature in °C  |  "
-                "HOMER Pro: Resources → Temperature → Import time series"
-            )
-        else:
-            temp_csv = pd.DataFrame({
-                "timestamp":     df["_ts"].dt.strftime("%Y-%m-%d %H:%M"),
-                "temperature_c": df["temperature"].round(3),
-            })
-            temp_caption = "Ambient temperature in °C  |  timestamp: yyyy-mm-dd hh:mm"
+        temp_csv = pd.DataFrame({
+            "timestamp":     export_ts,
+            "temperature_c": export_tmp.round(3),
+        })
+        temp_caption = (
+            f"{rows_label}  |  ambient temperature in °C  |  "
+            "HOMER Pro: Resources → Temperature → Import time series"
+        )
         st.download_button(
             "Download Temperature CSV  (°C)",
             data=temp_csv.to_csv(index=False).encode("utf-8"),
@@ -504,12 +760,21 @@ def _show_advanced_analysis(df: pd.DataFrame) -> None:
 
 def _show_resources_output(df: pd.DataFrame, ts_minutes: int = 60) -> None:
 
+    # Resample to project timestep so all displays use the simulation-ready resolution
+    if ts_minutes != 60:
+        try:
+            display_df = resample_resources_to_timestep(df, ts_minutes)
+        except Exception:
+            display_df = df
+    else:
+        display_df = df
+
     # ── 2. OVERVIEW ──────────────────────────────────────────────────────────
     st.divider()
     st.markdown("##### `STEP 2`")
     st.subheader("Overview")
 
-    summary = summarize_resources(df)
+    summary = summarize_resources(display_df)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Rows",             f"{summary.rows:,}")
     c2.metric("Mean GHI (Wh/m²)", f"{summary.ghi_mean:.2f}")
@@ -517,8 +782,8 @@ def _show_resources_output(df: pd.DataFrame, ts_minutes: int = 60) -> None:
     c4.metric("Mean Temp (°C)",   f"{summary.temperature_mean:.2f}")
     c5.metric("Coverage",         f"{summary.start_timestamp.year}–{summary.end_timestamp.year}")
 
-    st.caption("Raw Preview — first 24 rows (original hourly data)")
-    preview_df = df.head(24).rename(columns={
+    st.caption(f"Preview — first 24 rows ({ts_minutes}-min simulation-ready data)")
+    preview_df = display_df.head(24).rename(columns={
         "ghi":         "ghi_wh_per_m2",
         "ws50m":       "ws50m_mps",
         "temperature": "temperature_c",
@@ -575,7 +840,7 @@ def _show_resources_output(df: pd.DataFrame, ts_minutes: int = 60) -> None:
             st.error(f"Failed to compute clearness index: {e}")
 
     # ── 4. EXPORT + PV / Wind monthly tables + charts ─────────────────────────
-    _show_homer_export_section(df)
+    _show_homer_export_section(df, ts_minutes=ts_minutes)
 
     # ── 5. ADVANCED ANALYSIS (collapsible) ───────────────────────────────────
     st.divider()
@@ -590,52 +855,91 @@ def _show_resources_output(df: pd.DataFrame, ts_minutes: int = 60) -> None:
         try:
             path = save_resources(df, folder)
             st.success(f"Resources saved successfully: {path}")
-            st.rerun()
         except Exception as e:
             st.error(f"Failed to save resources: {e}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SECTION 1: SOURCE — NASA POWER Download
+# STEP 1A: Solar Resource — GHI + Temperature
 # ──────────────────────────────────────────────────────────────────────────────
 
 st.divider()
-st.markdown("##### `STEP 1`")
-st.subheader("Get Resource Data — NASA POWER")
-
-lat = project.location.lat
-lon = project.location.lon
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Latitude",  f"{lat:.4f}")
-c2.metric("Longitude", f"{lon:.4f}")
-start_year = c3.number_input("Start Year", min_value=1980, max_value=2100, value=2001, step=1)
-end_year   = c4.number_input("End Year",   min_value=1980, max_value=2100, value=2025, step=1)
-
+st.markdown("##### `STEP 1A`")
+st.subheader("Solar Resource — GHI + Temperature")
 st.caption(
-    f"NASA POWER hourly data is downloaded in chunks from {NASA_HOURLY_MIN_YEAR} onward. "
-    f"Earlier years are automatically clamped to {NASA_HOURLY_MIN_YEAR}."
+    "Choose NASA POWER (satellite-estimated, 2001–present) or upload a measured CSV "
+    "(e.g. SCADA data with GHI_W and AmbientTemperature columns)."
 )
 
-if st.button("Download from NASA POWER", type="primary", use_container_width=True):
-    try:
-        if end_year < start_year:
-            st.error("End year must be greater than or equal to start year.")
-        else:
-            with st.spinner("Downloading NASA POWER hourly data..."):
-                df_new, trim_warning = fetch_nasa_power_resources(
-                    lat=lat,
-                    lon=lon,
-                    start_year=int(start_year),
-                    end_year=int(end_year),
+nasa_tab, upload_solar_tab = st.tabs(["NASA POWER", "Upload Measured CSV"])
+
+with nasa_tab:
+    lat = project.location.lat
+    lon = project.location.lon
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Latitude",  f"{lat:.4f}")
+    c2.metric("Longitude", f"{lon:.4f}")
+    start_year = c3.number_input("Start Year", min_value=1980, max_value=2100, value=2001, step=1)
+    end_year   = c4.number_input("End Year",   min_value=1980, max_value=2100, value=2025, step=1)
+    st.caption(
+        f"Downloads GHI, temperature **and wind speed** together from NASA POWER "
+        f"(hourly from {NASA_HOURLY_MIN_YEAR} onward). This also populates STEP 1B."
+    )
+    if st.button("Download from NASA POWER", type="primary", use_container_width=True):
+        try:
+            if end_year < start_year:
+                st.error("End year must be ≥ start year.")
+            else:
+                with st.spinner("Downloading NASA POWER hourly data..."):
+                    df_new, trim_warning = fetch_nasa_power_resources(
+                        lat=lat, lon=lon,
+                        start_year=int(start_year), end_year=int(end_year),
+                    )
+                st.session_state.current_resources_df = df_new
+                st.success(
+                    "NASA POWER data downloaded — GHI, temperature, and wind speed all loaded. "
+                    "Wind section (STEP 1B) is also populated."
                 )
-            st.session_state.current_resources_df = df_new
-            st.success("NASA POWER resource data downloaded successfully.")
-            if trim_warning:
-                st.warning(trim_warning)
-    except Exception as e:
-        st.session_state.current_resources_df = None
-        st.error(f"Could not download NASA POWER data: {e}")
+                if trim_warning:
+                    st.warning(trim_warning)
+        except Exception as e:
+            st.session_state.current_resources_df = None
+            st.error(f"Could not download NASA POWER data: {e}")
+
+with upload_solar_tab:
+    _solar_upload_section()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# STEP 1B: Wind Resource — Wind Speed at 50 m
+# ──────────────────────────────────────────────────────────────────────────────
+
+st.divider()
+st.markdown("##### `STEP 1B`")
+st.subheader("Wind Resource — Wind Speed at 50 m")
+st.caption(
+    "If you downloaded from NASA POWER above, wind speed is already loaded. "
+    "Upload a measured CSV here to replace it with site-measured data."
+)
+
+nasa_wind_tab, upload_wind_tab = st.tabs(["Use NASA Data", "Upload Measured CSV"])
+
+with nasa_wind_tab:
+    _active_now = _get_active_df()
+    if _active_now is not None and "ws50m" in _active_now.columns:
+        ann_ws = float(_active_now["ws50m"].mean())
+        st.success(
+            f"Wind data loaded from NASA POWER — annual average: **{ann_ws:.3f} m/s** at 50 m. "
+            "Switch to the 'Upload Measured CSV' tab to replace with site-measured data."
+        )
+    else:
+        st.info(
+            "No wind data loaded yet. Download from NASA POWER in STEP 1A, "
+            "or upload a measured wind CSV in the tab on the right."
+        )
+
+with upload_wind_tab:
+    _wind_upload_section()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

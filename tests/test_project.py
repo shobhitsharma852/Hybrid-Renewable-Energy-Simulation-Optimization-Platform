@@ -18,8 +18,8 @@ def test_save_load_roundtrip():
         meta=ProjectMeta(name="Demo", author="Shobhit", description="Test"),
         location=ProjectLocation(lat=25.2812, lon=71.0524, timezone="Asia/Kolkata"),
         economics=ProjectEconomics(
-            discount_rate=8.0,
-            inflation_rate=2.0,
+            nominal_discount_rate_pct=8.0,
+            inflation_rate_pct=2.0,
             project_lifetime_years=25,
             annual_capacity_shortage=0.0,
         ),
@@ -36,7 +36,7 @@ def test_save_load_roundtrip():
     assert p2.location.timezone == "Asia/Kolkata"
     assert abs(p2.location.lat - 25.2812) < 1e-9
     assert abs(p2.location.lon - 71.0524) < 1e-9
-    assert p2.economics.discount_rate == 8.0
+    assert p2.economics.nominal_discount_rate_pct == 8.0
     assert p2.economics.project_lifetime_years == 25
     assert p2.load.scaled_annual_energy_kwh == 500000.0
 

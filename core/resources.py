@@ -9,6 +9,8 @@ from typing import Literal
 import pandas as pd
 import requests
 
+from core.timeseries import infer_step_minutes, resampled_end
+
 
 NASA_POWER_URL = "https://power.larc.nasa.gov/api/temporal/hourly/point"
 NASA_HOURLY_MIN_YEAR = 2001
@@ -110,11 +112,9 @@ def resample_resources_to_timestep(
         raise ValueError("time_step_minutes must be > 0")
 
     df = df.set_index("timestamp").sort_index()
-    new_index = pd.date_range(
-        start=df.index[0],
-        end=df.index[-1],
-        freq=f"{time_step_minutes}min",
-    )
+    source_step_minutes = infer_step_minutes(df.index)
+    end = resampled_end(df.index[-1], source_step_minutes, time_step_minutes)
+    new_index = pd.date_range(start=df.index[0], end=end, freq=f"{time_step_minutes}min")
     resampled = df.reindex(df.index.union(new_index))
     resampled = resampled.interpolate(method="time")
     resampled = resampled.reindex(new_index)

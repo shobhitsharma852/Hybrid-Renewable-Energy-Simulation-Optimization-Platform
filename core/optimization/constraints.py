@@ -264,11 +264,12 @@ def evaluate_candidate_constraints(
     if not passes_operating_reserve:
         failure_reasons.append("operating_reserve_failed")
 
-    is_feasible = (
-        passes_capacity_shortage
-        and passes_renewable_fraction
-        and passes_operating_reserve
-    )
+    # passes_operating_reserve is reported for diagnostics only — it is not a
+    # separate feasibility gate. Reserve shortfall is already folded into
+    # total_capacity_shortage_kwh / passes_capacity_shortage above (matching
+    # HOMER's own definition), so gating on it a second time here would make
+    # the percentage-based shortage tolerance meaningless for reserve cases.
+    is_feasible = passes_capacity_shortage and passes_renewable_fraction
 
     return ConstraintEvaluation(
         annual_capacity_shortage_pct=annual_capacity_shortage_pct,

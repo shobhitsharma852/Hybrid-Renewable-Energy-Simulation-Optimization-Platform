@@ -71,11 +71,12 @@ def _render_system_summary(state: dict, currency_symbol: str) -> None:
     # PV
     pv = draft.get("pv", {})
     pv_opts = pv.get("capacity_kw_options", [0])
+    pv_use_ss = pv.get("use_search_space", True)
     rows.append({
         "Component": "PV Solar",
         "Status": "Enabled" if pv.get("enabled") else "Disabled",
-        "Search Space": f"{pv_opts} kW",
-        "Max Size": f"{max(pv_opts):,.0f} kW",
+        "Search Space": f"{pv_opts} kW" if pv_use_ss else "InSolare Optimizer",
+        "Max Size": f"{max(pv_opts):,.0f} kW" if pv_use_ss else "—",
         f"Capital ({currency_symbol})": f"{pv.get('capital_cost_per_kw', 0):,.0f}/kW",
         "Lifetime": f"{pv.get('lifetime_years', 0)} yr",
     })
@@ -84,11 +85,12 @@ def _render_system_summary(state: dict, currency_symbol: str) -> None:
     wind = draft.get("wind", {})
     wind_opts = wind.get("quantity_options", [0])
     rated = wind.get("rated_capacity_kw", 0)
+    wind_use_ss = wind.get("use_search_space", True)
     rows.append({
         "Component": "Wind",
         "Status": "Enabled" if wind.get("enabled") else "Disabled",
-        "Search Space": f"{wind_opts} turbines",
-        "Max Size": f"{max(wind_opts) * rated:,.0f} kW",
+        "Search Space": f"{wind_opts} turbines" if wind_use_ss else "InSolare Optimizer",
+        "Max Size": f"{max(wind_opts) * rated:,.0f} kW" if wind_use_ss else "—",
         f"Capital ({currency_symbol})": f"{wind.get('capital_cost_per_turbine', 0):,.0f}/turbine",
         "Lifetime": f"{wind.get('lifetime_years', 0)} yr",
     })
@@ -97,11 +99,12 @@ def _render_system_summary(state: dict, currency_symbol: str) -> None:
     bat = draft.get("battery", {})
     bat_opts = bat.get("quantity_options", [0])
     cap_per = bat.get("nominal_capacity_kwh_per_string", 0)
+    bat_use_ss = bat.get("use_search_space", True)
     rows.append({
         "Component": "Battery",
         "Status": "Enabled" if bat.get("enabled") else "Disabled",
-        "Search Space": f"{bat_opts} strings",
-        "Max Size": f"{max(bat_opts) * cap_per:,.0f} kWh",
+        "Search Space": f"{bat_opts} strings" if bat_use_ss else "InSolare Optimizer",
+        "Max Size": f"{max(bat_opts) * cap_per:,.0f} kWh" if bat_use_ss else "—",
         f"Capital ({currency_symbol})": f"{bat.get('capital_cost_per_string', 0):,.0f}/string",
         "Lifetime": f"{bat.get('lifetime_years', 0)} yr",
     })
@@ -109,11 +112,12 @@ def _render_system_summary(state: dict, currency_symbol: str) -> None:
     # Converter
     conv = draft.get("converter", {})
     conv_opts = conv.get("capacity_kw_options", [0])
+    conv_use_ss = conv.get("use_search_space", True)
     rows.append({
         "Component": "Converter",
         "Status": "Enabled" if conv.get("enabled") else "Disabled",
-        "Search Space": f"{conv_opts} kW",
-        "Max Size": f"{max(conv_opts):,.0f} kW",
+        "Search Space": f"{conv_opts} kW" if conv_use_ss else "InSolare Optimizer",
+        "Max Size": f"{max(conv_opts):,.0f} kW" if conv_use_ss else "—",
         f"Capital ({currency_symbol})": f"{conv.get('capital_cost_per_kw', 0):,.0f}/kW",
         "Lifetime": f"{conv.get('inverter_lifetime_years', 0)} yr",
     })

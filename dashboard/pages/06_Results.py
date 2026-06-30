@@ -3,6 +3,7 @@ from __future__ import annotations
 import html as _html
 import json
 import math
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,13 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from core.components.config import load_components
+from core.economics.evaluator import (
+    build_default_economic_assumptions_for_project,
+    evaluate_candidate_economics,
+)
+from core.optimization.design_point import DesignPoint
+from core.project import load_project
+from core.simulation.run_project_simulation import run_project_simulation
 from dashboard.ui.state import active_project_name, set_active_project_folder_name
 
 EPSILON: float = 1e-9
@@ -76,12 +84,176 @@ def _get_default_idx(projects: list[str]) -> int:
     return projects.index(name) if name in projects else 0
 
 
+def _refresh_results_for_project(project_name: str) -> None:
+    """
+    Re-run the detailed simulation for whatever candidate (design point) was last
+    sent here from the Optimization page, using the CURRENT saved component
+    settings. This is what makes "Refresh Results" actually pick up changes like
+    toggling consider_temperature_effects on the Components page — previously the
+    button just re-read the same static output files without recomputing anything.
+    """
+    econ_existing = _load_economics(project_name)
+    if not econ_existing or "design" not in econ_existing:
+        st.warning(
+            "No candidate has been sent to Results yet for this project. "
+            "Go to the Optimization page and click 'Send Selected Candidate to Results' first."
+        )
+        return
+
+    with st.spinner("Re-running simulation with current component settings..."):
+        try:
+            d = econ_existing["design"]
+            design = DesignPoint(
+                pv_capacity_kw=float(d["pv_capacity_kw"]),
+                wind_quantity=int(d["wind_quantity"]),
+                battery_quantity=int(d["battery_quantity"]),
+                converter_capacity_kw=float(d["converter_capacity_kw"]),
+            )
+
+            sim_results = run_project_simulation(
+                project_name=project_name,
+                save_outputs=True,
+                design=design,
+            )
+
+            components  = load_components(Path("projects") / project_name)
+            assumptions = build_default_economic_assumptions_for_project(
+                project_name, components
+            )
+            econ = evaluate_candidate_economics(
+                project_name=project_name,
+                components=components,
+                design=design,
+                simulation_results=sim_results,
+                assumptions=assumptions,
+            )
+
+            try:
+                currency_sym = load_project(Path("projects") / project_name).meta.currency_symbol
+            except Exception:
+                currency_sym = econ_existing.get("currency_symbol", "$")
+
+            econ_payload = {
+                "currency_symbol": currency_sym,
+                "project_life_years": assumptions.project_life_years,
+                "real_discount_rate_pct": assumptions.real_discount_rate_pct,
+                "design": {
+                    "pv_capacity_kw": design.pv_capacity_kw,
+                    "wind_quantity": design.wind_quantity,
+                    "battery_quantity": design.battery_quantity,
+                    "converter_capacity_kw": design.converter_capacity_kw,
+                },
+                "economics": asdict(econ),
+            }
+
+            econ_path = _economics_path(project_name)
+            econ_path.parent.mkdir(parents=True, exist_ok=True)
+            econ_path.write_text(
+                json.dumps(econ_payload, indent=2, default=float),
+                encoding="utf-8",
+            )
+
+            st.success("Results refreshed with current component settings.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not refresh results: {exc}")
+
+
 # ============================================================
 # RENDER HELPERS
 # ============================================================
 
 def _fmt(v: float, dec: int = 0, pre: str = "", suf: str = "") -> str:
     return f"{pre}{v:,.{dec}f}{suf}"
+
+
+def _crf_from_economics(econ_payload: dict | None) -> float:
+    if not econ_payload:
+        return 0.0
+
+    eco = econ_payload.get("economics", {})
+    npc = float(eco.get("net_present_cost", 0.0) or 0.0)
+    annualized = float(eco.get("annualized_total_cost", 0.0) or 0.0)
+    if abs(npc) > EPSILON and annualized > EPSILON:
+        return annualized / npc
+
+    life = float(econ_payload.get("project_life_years", 0.0) or 0.0)
+    rate = float(econ_payload.get("real_discount_rate_pct", 0.0) or 0.0) / 100.0
+    if life <= EPSILON:
+        return 0.0
+    if rate <= EPSILON:
+        return 1.0 / life
+    return rate * (1.0 + rate) ** life / ((1.0 + rate) ** life - 1.0)
+
+
+def _money(v: float, cur: str, dec: int = 2) -> str:
+    sign = "-" if v < 0 else ""
+    return f"{sign}{cur}{abs(v):,.{dec}f}"
+
+
+def _cost_components_from_economics(
+    eco: dict,
+    *,
+    scale: float = 1.0,
+) -> list[dict[str, float | str]]:
+    components = [
+        ("Wind", "wind_breakdown"),
+        ("Battery", "battery_breakdown"),
+        ("PV", "pv_breakdown"),
+        ("Grid", "grid_breakdown"),
+        ("Converter", "converter_breakdown"),
+    ]
+    rows: list[dict[str, float | str]] = []
+    for label, key in components:
+        bd = eco.get(key, {}) or {}
+        capital = float(bd.get("capital", 0.0) or 0.0) * scale
+        replacement = float(bd.get("replacement_pv", 0.0) or 0.0) * scale
+        operating = float(bd.get("om_pv", 0.0) or 0.0) * scale
+        fuel = 0.0
+        salvage = -float(bd.get("salvage_pv", 0.0) or 0.0) * scale
+        total = capital + replacement + operating + fuel + salvage
+        rows.append({
+            "Component": label,
+            "Capital": capital,
+            "Replacement": replacement,
+            "O&M": operating,
+            "Fuel": fuel,
+            "Salvage": salvage,
+            "Total": total,
+        })
+    return rows
+
+
+def _cost_system_row(rows: list[dict[str, float | str]]) -> dict[str, float | str]:
+    totals = {
+        "Component": "Total",
+        "Capital": 0.0,
+        "Replacement": 0.0,
+        "O&M": 0.0,
+        "Fuel": 0.0,
+        "Salvage": 0.0,
+        "Total": 0.0,
+    }
+    for row in rows:
+        for key in ["Capital", "Replacement", "O&M", "Fuel", "Salvage", "Total"]:
+            totals[key] = float(totals[key]) + float(row.get(key, 0.0) or 0.0)
+    return totals
+
+
+def _cost_table_dataframe(rows: list[dict[str, float | str]], cur: str) -> pd.DataFrame:
+    display_rows = rows + [_cost_system_row(rows)]
+    return pd.DataFrame([
+        {
+            "Component": row["Component"],
+            f"Capital ({cur})": _money(float(row["Capital"]), cur),
+            f"Replacement ({cur})": _money(float(row["Replacement"]), cur),
+            f"O&M ({cur})": _money(float(row["O&M"]), cur),
+            f"Fuel ({cur})": _money(float(row["Fuel"]), cur),
+            f"Salvage ({cur})": _money(float(row["Salvage"]), cur),
+            f"Total ({cur})": _money(float(row["Total"]), cur),
+        }
+        for row in display_rows
+    ])
 
 
 def _metric_table(rows: list[tuple[str, str, str]], title: str = "", col1_header: str = "Quantity",
@@ -458,6 +630,50 @@ def _arch_summary(project_name: str) -> str:
         return ""
 
 
+def _arch_summary_lines(project_name: str, design: dict | None = None) -> list[str]:
+    """
+    Per-component lines for the HOMER-style architecture header.
+
+    Shows the ACTUAL sizes from the candidate design that was sent to Results
+    (design['pv_capacity_kw'], etc. from results_economics.json) — those are
+    what the displayed NPC/LCOE/cost-table numbers were computed from. Falls
+    back to the max of each component's configured search-space options only
+    when no candidate has been sent to Results yet, so the header isn't blank.
+    """
+    try:
+        c = load_components(Path("projects") / project_name)
+        design = design or {}
+        lines = []
+        if c.pv.enabled:
+            kw = design.get("pv_capacity_kw")
+            if kw is None:
+                kw = max(c.pv.capacity_kw_options) if c.pv.capacity_kw_options else 0
+            lines.append(f"Generic flat plate PV ({kw:,.0f} kW)")
+        if c.wind.enabled:
+            qty = design.get("wind_quantity")
+            if qty is None:
+                qty = max(c.wind.quantity_options) if c.wind.quantity_options else 0
+            lines.append(f"Generic {c.wind.rated_capacity_kw / 1000:.1f} MW ({qty:.2f})")
+        if c.battery.enabled:
+            qty = design.get("battery_quantity")
+            if qty is None:
+                qty = max(c.battery.quantity_options) if c.battery.quantity_options else 0
+            lines.append(
+                f"Generic {c.battery.nominal_capacity_kwh_per_string:.0f} kWh "
+                f"Li-Ion ({qty:.2f} strings)"
+            )
+        if c.converter.enabled:
+            kw = design.get("converter_capacity_kw")
+            if kw is None:
+                kw = max(c.converter.capacity_kw_options) if c.converter.capacity_kw_options else 0
+            lines.append(f"System Converter ({kw:,.0f} kW)")
+        if c.grid.enabled:
+            lines.append("Grid")
+        return lines
+    except Exception:
+        return []
+
+
 # ============================================================
 # PAGE TITLE + PROJECT SELECTOR
 # ============================================================
@@ -475,7 +691,12 @@ with c_sel:
     )
     set_active_project_folder_name(selected_project)
 with c_btn:
-    st.button("Refresh Results", use_container_width=True)
+    if st.button(
+        "Refresh Results",
+        use_container_width=True,
+        help="Re-runs the simulation for the last candidate sent here, using the current saved component settings.",
+    ):
+        _refresh_results_for_project(selected_project)
 
 # ============================================================
 # DATA LOADING
@@ -499,9 +720,42 @@ except Exception:
 
 cur = econ_payload.get("currency_symbol", "₹") if econ_payload else "₹"
 
-arch = _arch_summary(selected_project)
-if arch:
-    st.caption(arch)
+# HOMER-style top header: System Architecture (left) + 3 KPIs (right)
+_hdr_arch, _hdr_kpi = st.columns([2.5, 1])
+with _hdr_arch:
+    arch_lines = _arch_summary_lines(
+        selected_project, design=(econ_payload or {}).get("design")
+    )
+    if arch_lines:
+        st.markdown(
+            "<div style='font-size:0.92rem;line-height:1.75;padding:4px 0;'>"
+            "<span style='font-weight:700;'>System Architecture:</span><br>"
+            + "<br>".join(f"&nbsp;&nbsp;{_html.escape(ln)}" for ln in arch_lines)
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+with _hdr_kpi:
+    if econ_payload:
+        _eco_h = econ_payload.get("economics", {})
+        _npc_h  = float(_eco_h.get("net_present_cost",         0))
+        _lcoe_h = float(_eco_h.get("levelized_cost_of_energy", 0))
+        # HOMER's "Operating Cost" = total annualized cost minus annualized
+        # capital cost (i.e. annualized replacement + O&M + grid, net of
+        # annualized salvage) — NOT just raw annual O&M + grid net cost,
+        # which omitted annualized replacement/salvage and understated this
+        # by ~8.5% vs HOMER Pro on test10.
+        _op_h   = float(_eco_h.get("annualized_total_cost", 0)) - float(_eco_h.get("annualized_capital_cost", 0))
+        st.markdown(
+            "<div style='background:#f0f4ff;border:1px solid #c5d4f5;border-radius:6px;"
+            "padding:10px 16px;font-size:0.92rem;line-height:2.0;'>"
+            f"<b>Total NPC:</b>&nbsp;&nbsp;{_html.escape(_money(_npc_h,  cur, 0))}<br>"
+            f"<b>Levelized COE:</b>&nbsp;&nbsp;{_html.escape(_money(_lcoe_h, cur, 2))}/kWh<br>"
+            f"<b>Operating Cost:</b>&nbsp;&nbsp;{_html.escape(_money(_op_h,  cur, 0))}/yr"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+st.divider()
 
 with st.expander("Output file paths", expanded=False):
     st.code(str(_hourly_path(selected_project)))
@@ -522,87 +776,66 @@ with tab_cost:
     if not econ_payload:
         st.info("No economics data yet. Go to Optimization → Send to Results.")
     else:
-        eco    = econ_payload.get("economics", {})
-        design = econ_payload.get("design", {})
-        npc    = float(eco.get("net_present_cost",         0))
-        lcoe   = float(eco.get("levelized_cost_of_energy", 0))
-        ann    = float(eco.get("annualized_total_cost",    0))
-        ann_c  = float(eco.get("annualized_capital_cost",  0))
-        rdr    = float(econ_payload.get("real_discount_rate_pct", 0))
-        life   = int(econ_payload.get("project_life_years", 25))
+        eco = econ_payload.get("economics", {})
+        npc = float(eco.get("net_present_cost", 0))
 
-        left, right = st.columns([1, 1])
-
-        with left:
-            _metric_table([
-                ("Net Present Cost",    _fmt(npc, pre=cur+" "),      ""),
-                ("LCOE",                _fmt(lcoe, 4, pre=cur+" "), f"{cur}/kWh"),
-                ("Annualized Cost",     _fmt(ann, pre=cur+" "),     f"{cur}/yr"),
-                ("Annualized Capital",  _fmt(ann_c, pre=cur+" "),   f"{cur}/yr"),
-                ("Real Discount Rate",  _fmt(rdr, 3),               "%"),
-                ("Project Lifetime",    str(life),                  "years"),
-                ("PV",                  _fmt(design.get("pv_capacity_kw",0)),     "kW"),
-                ("Wind",                str(design.get("wind_quantity",0)),        "turbines"),
-                ("Battery",             str(design.get("battery_quantity",0)),     "strings"),
-                ("Converter",           _fmt(design.get("converter_capacity_kw",0)), "kW"),
-            ], "System Summary")
-
-            comp_keys = [
-                ("PV Solar",  "pv_breakdown"),
-                ("Wind",      "wind_breakdown"),
-                ("Battery",   "battery_breakdown"),
-                ("Converter", "converter_breakdown"),
-                ("Grid",      "grid_breakdown"),
-            ]
-            rows, totals = [], [0.0, 0.0, 0.0, 0.0, 0.0]
-            for label, key in comp_keys:
-                bd    = eco.get(key, {})
-                cap   = float(bd.get("capital",         0))
-                repl  = float(bd.get("replacement_pv",  0))
-                om    = float(bd.get("om_pv",           0))
-                salv  = float(bd.get("salvage_pv",      0))
-                total = cap + repl + om - salv
-                rows.append({"Component": label,
-                              "Capital":  f"{cur} {cap:,.0f}",
-                              "Repl.":    f"{cur} {repl:,.0f}",
-                              "O&M":      f"{cur} {om:,.0f}",
-                              "Salvage":  f"{cur} {-salv:,.0f}",
-                              "Total NPC":f"{cur} {total:,.0f}"})
-                for i, v in enumerate([cap, repl, om, -salv, total]):
-                    totals[i] += v
-            rows.append({"Component": "Total",
-                          "Capital":  f"{cur} {totals[0]:,.0f}",
-                          "Repl.":    f"{cur} {totals[1]:,.0f}",
-                          "O&M":      f"{cur} {totals[2]:,.0f}",
-                          "Salvage":  f"{cur} {totals[3]:,.0f}",
-                          "Total NPC":f"{cur} {totals[4]:,.0f}"})
-            st.caption(f"All values in {cur} (present value)")
-            st.dataframe(pd.DataFrame(rows).set_index("Component"),
-                         use_container_width=True, height=248)
-
-        with right:
-            # Stacked NPC bar: Capital / Replacement / O&M / Salvage per component
-            comp_labels = [lbl for lbl, _ in comp_keys]
-            cap_v  = [float(eco.get(k,{}).get("capital",        0)) for _,k in comp_keys]
-            repl_v = [float(eco.get(k,{}).get("replacement_pv", 0)) for _,k in comp_keys]
-            om_v   = [float(eco.get(k,{}).get("om_pv",          0)) for _,k in comp_keys]
-            salv_v = [-float(eco.get(k,{}).get("salvage_pv",    0)) for _,k in comp_keys]
-
-            fig = go.Figure()
-            fig.add_trace(go.Bar(x=comp_labels, y=cap_v,  name="Capital",     marker_color="#1a5fb4"))
-            fig.add_trace(go.Bar(x=comp_labels, y=repl_v, name="Replacement", marker_color="#e5a50a"))
-            fig.add_trace(go.Bar(x=comp_labels, y=om_v,   name="O&M",         marker_color="#26a269"))
-            fig.add_trace(go.Bar(x=comp_labels, y=salv_v, name="Salvage",     marker_color="#c01c28"))
-            fig.update_layout(
-                barmode="relative",
-                title=dict(text=f"NPC by Component  —  Total: {cur} {npc:,.0f}", font=dict(size=17)),
-                xaxis_title="Component", yaxis_title=f"Present Value ({cur})",
-                height=490,
-                legend=dict(orientation="h", y=1.06, x=0, font=dict(size=13)),
-                margin=dict(l=60, r=10, t=55, b=35),
+        controls, chart_area = st.columns([0.9, 5.4], vertical_alignment="top")
+        with controls:
+            cost_type = st.radio(
+                "Cost Type",
+                ["Net Present", "Annualized"],
+                key="results_cost_type",
             )
+            categorize = st.radio(
+                "Categorize",
+                ["By Component", "By Cost Type"],
+                key="results_cost_category",
+            )
+
+        scale = _crf_from_economics(econ_payload) if cost_type == "Annualized" else 1.0
+        cost_rows = _cost_components_from_economics(eco, scale=scale)
+        system_row = _cost_system_row(cost_rows)
+        value_label = "Annualized Cost" if cost_type == "Annualized" else "Net Present Cost"
+        y_title = f"{value_label} ({cur}/yr)" if cost_type == "Annualized" else f"{value_label} ({cur})"
+
+        if categorize == "By Component":
+            x_values = [str(row["Component"]) for row in cost_rows]
+            y_values = [float(row["Total"]) for row in cost_rows]
+            chart_title = f"{value_label} by Component"
+        else:
+            x_values = ["Capital", "Operating", "Replacement", "Salvage", "Fuel"]
+            y_values = [
+                float(system_row["Capital"]),
+                float(system_row["O&M"]),
+                float(system_row["Replacement"]),
+                float(system_row["Salvage"]),
+                float(system_row["Fuel"]),
+            ]
+            chart_title = f"{value_label} by Cost Type"
+
+        with chart_area:
+            fig = go.Figure(go.Bar(
+                x=x_values,
+                y=y_values,
+                marker_color="#5aa7d6",
+                hovertemplate="%{x}<br>" + y_title + ": %{y:,.2f}<extra></extra>",
+            ))
+            fig.update_layout(
+                title=dict(text=chart_title, font=dict(size=17)),
+                xaxis_title="",
+                yaxis_title=y_title,
+                height=390,
+                margin=dict(l=70, r=15, t=45, b=55),
+            )
+            fig.update_yaxes(zeroline=True, zerolinewidth=1, zerolinecolor="#666666")
             st.plotly_chart(_style_figure(fig), use_container_width=True)
 
+        st.dataframe(
+            _cost_table_dataframe(cost_rows, cur),
+            use_container_width=True,
+            height=260,
+            hide_index=True,
+        )
 
 # ── TAB 2: CASH FLOW ─────────────────────────────────────────────────────────
 with tab_cash:

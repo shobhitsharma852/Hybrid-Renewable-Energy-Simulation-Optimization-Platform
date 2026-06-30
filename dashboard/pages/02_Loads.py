@@ -414,22 +414,27 @@ def _prepare_simulation_ready_load(df: pd.DataFrame, ts_minutes: int) -> pd.Data
     return preview_df
 
 
-def _render_simulation_ready_preview(df: pd.DataFrame, ts_minutes: int) -> None:
+def _show_load_output(df: pd.DataFrame, ts_minutes: int = 60):
+    # Resample to the project's timestep so there is exactly one view everywhere
     try:
-        preview_df = _prepare_simulation_ready_load(df, ts_minutes)
-        preview_summary = summarize_load(preview_df)
+        display_df = _prepare_simulation_ready_load(df, ts_minutes)
     except Exception as e:
-        st.warning(f"Could not prepare simulation-ready load preview: {e}")
-        return
+        st.warning(f"Could not prepare load preview: {e}")
+        display_df = df
+
+    summary = summarize_load(display_df)
 
     st.divider()
-    st.subheader("Simulation-Ready Load Preview")
+    st.subheader("Load Summary")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Rows", f"{preview_summary.rows:,}")
-    c2.metric("Peak Load (kW)", f"{preview_summary.peak_kw:.2f}")
-    c3.metric("Average Load (kW)", f"{preview_summary.average_kw:.2f}")
-    c4.metric("Annual Energy (kWh)", f"{preview_summary.annual_energy_kwh:,.0f}")
+    c1.metric("Rows", f"{summary.rows:,}")
+    c2.metric("Peak Load (kW)", f"{summary.peak_kw:.2f}")
+    c3.metric("Average Load (kW)", f"{summary.average_kw:.2f}")
+    c4.metric("Annual Energy (kWh)", f"{summary.annual_energy_kwh:,.0f}")
+
+    st.subheader("Data Preview (first 24 rows)")
+    st.dataframe(display_df.head(24), use_container_width=True)
 
     preview_modes = ["Monthly", "Daily", "Load Duration"]
     if hasattr(st, "segmented_control"):
@@ -449,34 +454,13 @@ def _render_simulation_ready_preview(df: pd.DataFrame, ts_minutes: int) -> None:
         )
 
     if preview_mode == "Monthly":
-        _render_monthly_load_comparison(preview_df)
+        _render_monthly_load_comparison(display_df)
     elif preview_mode == "Daily":
-        _render_daily_load_comparison(preview_df)
+        _render_daily_load_comparison(display_df)
     else:
-        _render_load_duration_curve(preview_df)
+        _render_load_duration_curve(display_df)
 
-    _render_load_quality_checks(preview_df)
-
-    st.subheader("Simulation-Ready Data Preview")
-    st.dataframe(preview_df.head(24), use_container_width=True)
-
-
-def _show_load_output(df: pd.DataFrame, ts_minutes: int = 60):
-    summary = summarize_load(df)
-
-    st.divider()
-    st.subheader("Load Summary (Original Data)")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Rows", f"{summary.rows:,}")
-    c2.metric("Peak Load (kW)", f"{summary.peak_kw:.2f}")
-    c3.metric("Average Load (kW)", f"{summary.average_kw:.2f}")
-    c4.metric("Annual Energy (kWh)", f"{summary.annual_energy_kwh:,.0f}")
-
-    st.subheader("Original Data Preview (first 24 rows)")
-    st.dataframe(df.head(24), use_container_width=True)
-
-    _render_simulation_ready_preview(df, ts_minutes)
+    _render_load_quality_checks(display_df)
 
     st.divider()
     _render_annual_energy_scaling()
@@ -485,7 +469,6 @@ def _show_load_output(df: pd.DataFrame, ts_minutes: int = 60):
         try:
             path = save_load(df, folder)
             st.success(f"Load saved successfully: {path}")
-            st.rerun()
         except Exception as e:
             st.error(f"Failed to save load: {e}")
 
@@ -501,9 +484,20 @@ if method == "Upload CSV":
 
     if uploaded_file is not None:
         try:
+            from core.load import infer_time_step_hours, annual_energy_kwh as _annual_kwh
             load_df = read_uploaded_load(uploaded_file, uploaded_file.name)
             st.session_state.current_load_df = load_df
-            st.success("Load file read and validated successfully.")
+            detected_min = int(round(infer_time_step_hours(load_df) * 60))
+            ann_kwh = _annual_kwh(load_df)
+            st.success(
+                f"Load file read  ·  Detected: **{detected_min}-min**  ·  "
+                f"{len(load_df):,} rows  ·  {ann_kwh:,.0f} kWh/yr"
+            )
+            if detected_min != time_step_minutes:
+                st.info(
+                    f"Data is {detected_min}-min; will be resampled to "
+                    f"**{time_step_minutes}-min** for simulation."
+                )
         except Exception as e:
             st.session_state.current_load_df = None
             st.error(f"Load validation failed: {e}")
@@ -601,6 +595,7 @@ elif method == "Constant Load":
                 timestep_variability_pct=float(timestep_variability_pct),
                 random_seed=seed_value,
                 preserve_annual_energy=bool(preserve_annual_energy),
+                time_step_minutes=time_step_minutes,
             )
             constant_profiles = [[float(constant_kw)] * 24 for _ in range(12)]
             generation_settings = LoadGenerationSettings(
@@ -723,6 +718,7 @@ elif method == "24 Hour Profile":
                     timestep_variability_pct=float(timestep_variability_pct),
                     random_seed=seed_value,
                     preserve_annual_energy=bool(preserve_annual_energy),
+                    time_step_minutes=time_step_minutes,
                 )
                 daily_profiles = [[float(v) for v in profile] for _ in range(12)]
                 generation_settings = LoadGenerationSettings(
@@ -935,6 +931,7 @@ elif method == "Weekday/Weekend + Monthly":
                 timestep_variability_pct=float(timestep_variability_pct),
                 random_seed=int(random_seed) if seed_enabled else None,
                 preserve_annual_energy=bool(preserve_annual_energy),
+                time_step_minutes=time_step_minutes,
             )
             save_load_generation_settings(generation_settings, folder)
             st.session_state.current_load_df = load_df

@@ -7,9 +7,6 @@
       3000.0,
       4000.0
     ],
-    "optimizer_kw_min": 0.0,
-    "optimizer_kw_max": 15000.0,
-    "optimizer_set_limits": false,
     "capital_cost_per_kw": 45000.0,
     "replacement_cost_per_kw": 30000.0,
     "om_cost_per_kw_per_year": 600.0,
@@ -50,9 +47,6 @@
   "wind": {
     "enabled": true,
     "use_search_space": true,
-    "optimizer_qty_min": 0,
-    "optimizer_qty_max": 4,
-    "optimizer_set_limits": false,
     "turbine_model_name": "Generic 1.5 MW",
     "rated_capacity_kw": 1500.0,
     "quantity_options": [
@@ -64,7 +58,7 @@
     "om_cost_per_turbine_per_year": 3000000.0,
     "lifetime_years": 20,
     "hub_height_m": 80.0,
-    "consider_temperature_effects": true,
+    "consider_temperature_effects": false,
     "bus": "AC",
     "power_curve": {
       "enabled": true,
@@ -130,9 +124,6 @@
       4,
       6
     ],
-    "optimizer_qty_min": 0,
-    "optimizer_qty_max": 40,
-    "optimizer_set_limits": false,
     "nominal_voltage_v": 600.0,
     "nominal_capacity_kwh_per_string": 1000.0,
     "roundtrip_efficiency_pct": 90.0,
@@ -166,9 +157,6 @@
       2500.0,
       3500.0
     ],
-    "optimizer_kw_min": 0.0,
-    "optimizer_kw_max": 6000.0,
-    "optimizer_set_limits": false,
     "capital_cost_per_kw": 7000.0,
     "replacement_cost_per_kw": 5000.0,
     "om_cost_per_kw_per_year": 100.0,

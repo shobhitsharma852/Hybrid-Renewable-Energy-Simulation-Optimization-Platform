@@ -11,6 +11,8 @@ import warnings
 
 import pandas as pd
 
+from core.timeseries import infer_step_minutes, resampled_end
+
 
 @dataclass(frozen=True)
 class LoadSummary:
@@ -388,21 +390,16 @@ def resample_load_to_timestep(
         raise ValueError("time_step_minutes must be > 0")
 
     df = df.set_index("timestamp").sort_index()
-    source_time_step_minutes = infer_time_step_hours(
-        df.reset_index()[["timestamp", "load_kw"]]
-    ) * 60.0
+    source_time_step_minutes = infer_step_minutes(df.index)
 
     if abs(source_time_step_minutes - float(time_step_minutes)) <= 1e-9:
         return df.reset_index()[["timestamp", "load_kw"]].reset_index(drop=True)
 
-    new_index = pd.date_range(
-        start=df.index[0],
-        end=df.index[-1],
-        freq=f"{time_step_minutes}min",
-    )
+    end = resampled_end(df.index[-1], source_time_step_minutes, time_step_minutes)
+    new_index = pd.date_range(start=df.index[0], end=end, freq=f"{time_step_minutes}min")
 
     if time_step_minutes < source_time_step_minutes:
-        # Repeat the last known load value within each source interval.
+        # Piecewise constant hold: repeat the last known value within each source interval.
         resampled = df.reindex(df.index.union(new_index)).sort_index()
         resampled["load_kw"] = pd.to_numeric(resampled["load_kw"], errors="coerce").ffill()
         resampled = resampled.reindex(new_index)
@@ -645,18 +642,21 @@ def read_uploaded_load(uploaded_file: BinaryIO, filename: str) -> pd.DataFrame:
 def create_constant_load(
     constant_kw: float,
     year: int = 2025,
-    expect_rows: int = 8760,
+    expect_rows: int | None = None,
     daily_variability_pct: float = 0.0,
     timestep_variability_pct: float = 0.0,
     random_seed: int | None = None,
     preserve_annual_energy: bool = True,
+    time_step_minutes: int = 60,
 ) -> pd.DataFrame:
     if constant_kw < 0:
         raise ValueError("constant_kw cannot be negative")
 
+    # Default row count: one full year at the requested resolution
+    if expect_rows is None:
+        expect_rows = int(365 * 24 * 60 / time_step_minutes)
+
     if daily_variability_pct > 0 or timestep_variability_pct > 0:
-        if expect_rows != 8760:
-            raise ValueError("Variable constant loads currently require expect_rows=8760")
         return create_weekday_weekend_monthly_load(
             weekday_hourly_profile_kw=[float(constant_kw)] * 24,
             weekend_hourly_profile_kw=[float(constant_kw)] * 24,
@@ -666,14 +666,15 @@ def create_constant_load(
             timestep_variability_pct=timestep_variability_pct,
             random_seed=random_seed,
             preserve_annual_energy=preserve_annual_energy,
+            time_step_minutes=time_step_minutes,
         )
 
-    ts = pd.date_range(f"{year}-01-01 00:00:00", periods=expect_rows, freq="h")
+    ts = pd.date_range(f"{year}-01-01 00:00:00", periods=expect_rows, freq=f"{time_step_minutes}min")
     df = pd.DataFrame({
         "timestamp": ts,
         "load_kw": [float(constant_kw)] * expect_rows,
     })
-    return validate_hourly_load(df, expect_rows=expect_rows)
+    return validate_hourly_load(df, expect_rows=expect_rows, time_step_hours=time_step_minutes / 60.0)
 
 
 def create_daily_profile_load(
@@ -684,6 +685,7 @@ def create_daily_profile_load(
     timestep_variability_pct: float = 0.0,
     random_seed: int | None = None,
     preserve_annual_energy: bool = True,
+    time_step_minutes: int = 60,
 ) -> pd.DataFrame:
     if len(hourly_profile_kw) != 24:
         raise ValueError("hourly_profile_kw must contain exactly 24 values")
@@ -693,8 +695,6 @@ def create_daily_profile_load(
         raise ValueError("Daily profile values cannot be negative")
 
     if daily_variability_pct > 0 or timestep_variability_pct > 0:
-        if days != 365:
-            raise ValueError("Variable daily profile loads currently require days=365")
         return create_weekday_weekend_monthly_load(
             weekday_hourly_profile_kw=vals,
             weekend_hourly_profile_kw=vals,
@@ -704,17 +704,20 @@ def create_daily_profile_load(
             timestep_variability_pct=timestep_variability_pct,
             random_seed=random_seed,
             preserve_annual_energy=preserve_annual_energy,
+            time_step_minutes=time_step_minutes,
         )
 
-    expect_rows = 24 * days
-    ts = pd.date_range(f"{year}-01-01 00:00:00", periods=expect_rows, freq="h")
-    loads = [vals[i % 24] for i in range(expect_rows)]
+    steps_per_day = 24 * 60 // time_step_minutes
+    expect_rows = steps_per_day * days
+    ts = pd.date_range(f"{year}-01-01 00:00:00", periods=expect_rows, freq=f"{time_step_minutes}min")
+    # Pick the hourly profile value for each sub-hourly timestamp via timestamp.hour
+    loads = [vals[int(t.hour)] for t in ts]
 
     df = pd.DataFrame({
         "timestamp": ts,
         "load_kw": loads,
     })
-    return validate_hourly_load(df, expect_rows=expect_rows)
+    return validate_hourly_load(df, expect_rows=expect_rows, time_step_hours=time_step_minutes / 60.0)
 
 
 def create_weekday_weekend_monthly_load(
@@ -726,6 +729,7 @@ def create_weekday_weekend_monthly_load(
     timestep_variability_pct: float = 0.0,
     random_seed: int | None = None,
     preserve_annual_energy: bool = True,
+    time_step_minutes: int = 60,
 ) -> pd.DataFrame:
     if len(weekday_hourly_profile_kw) != 24:
         raise ValueError("weekday_hourly_profile_kw must contain exactly 24 values")
@@ -760,6 +764,7 @@ def create_weekday_weekend_monthly_load(
         timestep_variability_pct=timestep_variability_pct,
         random_seed=random_seed,
         preserve_annual_energy=preserve_annual_energy,
+        time_step_minutes=time_step_minutes,
     )
 
 
@@ -870,6 +875,7 @@ def create_weekday_weekend_monthly_profile_load(
     timestep_variability_pct: float = 0.0,
     random_seed: int | None = None,
     preserve_annual_energy: bool = True,
+    time_step_minutes: int = 60,
 ) -> pd.DataFrame:
     weekday_profiles = _validate_monthly_hourly_profiles(
         weekday_monthly_profiles_kw,
@@ -890,7 +896,7 @@ def create_weekday_weekend_monthly_profile_load(
 
     start = pd.Timestamp(f"{year}-01-01 00:00:00")
     end = pd.Timestamp(f"{year + 1}-01-01 00:00:00")
-    ts = pd.date_range(start=start, end=end, freq="h", inclusive="left")
+    ts = pd.date_range(start=start, end=end, freq=f"{time_step_minutes}min", inclusive="left")
 
     rng = random.Random(random_seed)
     daily_multipliers: dict[pd.Timestamp, float] = {}
@@ -923,7 +929,7 @@ def create_weekday_weekend_monthly_profile_load(
         "timestamp": ts,
         "load_kw": loads,
     })
-    df = validate_hourly_load(df, expect_rows=len(ts))
+    df = validate_hourly_load(df, expect_rows=len(ts), time_step_hours=time_step_minutes / 60.0)
 
     if preserve_annual_energy and (daily_variability_pct > 0 or timestep_variability_pct > 0):
         baseline_df = create_weekday_weekend_monthly_profile_load(
@@ -931,6 +937,7 @@ def create_weekday_weekend_monthly_profile_load(
             weekend_monthly_profiles_kw=weekend_profiles,
             year=year,
             preserve_annual_energy=False,
+            time_step_minutes=time_step_minutes,
         )
         baseline_energy_kwh = annual_energy_kwh(baseline_df)
         if baseline_energy_kwh > 0:
