@@ -152,7 +152,6 @@ def _bat_cfg(n_strings: int) -> BatteryComponentConfig:
         om_cost_per_string_per_year=7_000.0,    # $7k/MWh/yr (Rs 5.88 lakh/yr)
         throughput_kwh=8_000_000.0,             # LFP ~4,000 cycles x 2 x 1,000 kWh
         lifetime_years=15,
-        self_discharge_rate_pct_per_day=0.05,
         replacement_degradation_limit_pct=20.0,
     )
 

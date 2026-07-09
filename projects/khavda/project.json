@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "name": "khavda",
+    "author": "nm",
+    "description": "Khavda, Kutch (Gujarat) hybrid PV-wind-grid-converter-BESS validation case vs HOMER Pro",
+    "currency_symbol": "₹",
+    "currency_name": "INR"
+  },
+  "location": {
+    "lat": 23.86,
+    "lon": 69.69,
+    "timezone": "Asia/Kolkata"
+  },
+  "economics": {
+    "nominal_discount_rate_pct": 10.0,
+    "inflation_rate_pct": 6.0,
+    "project_lifetime_years": 25,
+    "annual_capacity_shortage": 0.0
+  },
+  "load": {
+    "scaled_annual_energy_kwh": null
+  },
+  "version": "1.0",
+  "simulation_time_step_minutes": 60,
+  "dispatch_strategy": "renewable_first"
+}

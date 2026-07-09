@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "name": "dhule_2",
+    "author": "nm",
+    "description": "Dhule INR hybrid PV-wind-grid-converter-BESS validation case",
+    "currency_symbol": "₹",
+    "currency_name": "INR"
+  },
+  "location": {
+    "lat": 20.9042,
+    "lon": 74.7749,
+    "timezone": "Asia/Kolkata"
+  },
+  "economics": {
+    "nominal_discount_rate_pct": 10.0,
+    "inflation_rate_pct": 6.0,
+    "project_lifetime_years": 25,
+    "annual_capacity_shortage": 0.0
+  },
+  "load": {
+    "scaled_annual_energy_kwh": null
+  },
+  "version": "1.0",
+  "simulation_time_step_minutes": 20,
+  "dispatch_strategy": "renewable_first"
+}

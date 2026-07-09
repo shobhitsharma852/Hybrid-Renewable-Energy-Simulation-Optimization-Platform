@@ -993,13 +993,44 @@ with tab_renew:
         ], "Renewable Penetration Metrics")
 
     with right:
-        # Excess energy heatmap
-        if "excess_energy_kw" in hourly_df.columns:
+        # ── HOMER-style instantaneous renewable penetration heatmaps ─────────
+        if "pv_kw" in hourly_df.columns and "wind_kw" in hourly_df.columns:
+            _re_kw  = hourly_df["pv_kw"].values + hourly_df["wind_kw"].values
+            _ld_kw  = hourly_df["load_kw"].values if "load_kw" in hourly_df.columns else np.ones_like(_re_kw)
+            _gi_kw  = hourly_df["grid_import_kw"].values if "grid_import_kw" in hourly_df.columns else np.zeros_like(_re_kw)
+
+            # Metric 1: RE output ÷ load (%, can exceed 100 when there is surplus)
+            _re_vs_load = np.where(_ld_kw > EPSILON, _re_kw / _ld_kw * 100.0, 0.0)
+
+            # Metric 2: RE output ÷ total generation (instantaneous RE fraction)
+            _total_kw = _re_kw + _gi_kw
+            _re_vs_gen  = np.where(_total_kw > EPSILON, _re_kw / _total_kw * 100.0, 0.0)
+
             st.plotly_chart(
-                _heatmap(hourly_df["excess_energy_kw"].values,
-                         "Excess / Unserved Energy (kW)", "kW", "YlOrRd", height=420,
-                         timestamps=hourly_df["timestamp"]),
+                _heatmap(_re_vs_load, "Instantaneous RE Output / Load", "%",
+                         "RdYlGn", height=370, timestamps=hourly_df["timestamp"]),
                 use_container_width=True,
+            )
+            st.markdown(
+                "<div style='font-size:1.05em; margin-top:-12px; margin-bottom:10px;'>"
+                "<span style='color:#d62728;'>■</span> <b>Red (0 %)</b> — no renewable output, load met entirely by grid &nbsp;|&nbsp; "
+                "<span style='color:#f4c010;'>■</span> <b>Yellow (≈50 %)</b> — renewables cover half the load &nbsp;|&nbsp; "
+                "<span style='color:#2ca02c;'>■</span> <b>Green (≥100 %)</b> — renewables meet or exceed the full load (surplus may be exported or stored)"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            st.plotly_chart(
+                _heatmap(_re_vs_gen, "Instantaneous RE Fraction of Generation", "%",
+                         "RdYlGn", height=370, timestamps=hourly_df["timestamp"]),
+                use_container_width=True,
+            )
+            st.markdown(
+                "<div style='font-size:1.05em; margin-top:-12px;'>"
+                "<span style='color:#d62728;'>■</span> <b>Red (0 %)</b> — all power from grid, no renewable generation &nbsp;|&nbsp; "
+                "<span style='color:#f4c010;'>■</span> <b>Yellow (≈50 %)</b> — renewables and grid contributing equally &nbsp;|&nbsp; "
+                "<span style='color:#2ca02c;'>■</span> <b>Green (100 %)</b> — renewables supply 100 % of generation, zero grid import"
+                "</div>",
+                unsafe_allow_html=True,
             )
         elif "renewable_kw" in hourly_df.columns:
             st.plotly_chart(

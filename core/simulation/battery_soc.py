@@ -500,57 +500,7 @@ def accumulate_cycle_damage(
 
 
 # ============================================================
-# SECTION 5 — SELF-DISCHARGE
-# ============================================================
-
-def compute_self_discharge_loss(
-    *,
-    current_soc_pct: float,
-    total_capacity_kwh: float,
-    minimum_soc_pct: float,
-    self_discharge_rate_pct_per_day: float,
-    time_step_hours: float,
-) -> tuple[float, float]:
-    """
-    Compute passive energy lost to self-discharge over one timestep.
-
-    Self-discharge reduces stored energy proportionally to how much is stored,
-    but cannot take SOC below minimum_soc_pct (battery cannot self-discharge
-    below its protection threshold).
-
-    Formula:
-        loss = stored_energy × rate_per_day × (dt_hours / 24)
-
-    Reference: HOMER Pro Battery → Self-Discharge Rate parameter.
-    Typical values: Li-Ion 0.05–0.1 %/day, Lead-acid 0.1–0.3 %/day.
-
-    Returns
-    -------
-    (new_soc_pct, actual_loss_kwh)
-    """
-    if self_discharge_rate_pct_per_day <= 0.0 or total_capacity_kwh <= 0.0:
-        return current_soc_pct, 0.0
-
-    current_soc_pct = max(0.0, min(100.0, float(current_soc_pct)))
-    minimum_soc_pct = max(0.0, min(100.0, float(minimum_soc_pct)))
-
-    stored_kwh = total_capacity_kwh * (current_soc_pct / 100.0)
-    min_stored_kwh = total_capacity_kwh * (minimum_soc_pct / 100.0)
-
-    # Self-discharge is proportional to stored energy, scaled to the timestep length.
-    loss_fraction = (self_discharge_rate_pct_per_day / 100.0) * (time_step_hours / 24.0)
-    loss_kwh = stored_kwh * loss_fraction
-
-    # Clamp: SOC cannot fall below the minimum protection threshold.
-    new_stored_kwh = max(min_stored_kwh, stored_kwh - loss_kwh)
-    actual_loss_kwh = stored_kwh - new_stored_kwh
-    new_soc_pct = 100.0 * new_stored_kwh / total_capacity_kwh
-
-    return new_soc_pct, actual_loss_kwh
-
-
-# ============================================================
-# SECTION 6 — EFFICIENCY HELPERS
+# SECTION 5 — EFFICIENCY HELPERS
 # ============================================================
 
 def _split_roundtrip_efficiency(roundtrip_efficiency_pct: float) -> tuple[float, float]:

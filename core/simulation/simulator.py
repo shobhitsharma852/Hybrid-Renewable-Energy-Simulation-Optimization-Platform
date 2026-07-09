@@ -264,6 +264,12 @@ class HybridSystemSimulator:
                     components.battery.calendar_fade_pct_per_year * elapsed_years
                 )
 
+            # DoD fade: maps Miner's cumulative damage (0 → 1.0) onto the capacity
+            # loss scale defined by replacement_degradation_limit_pct (_rdl).
+            # When cumulative_cycle_damage = 1.0 the battery has reached end of life
+            # by cycling, and dod_fade_pct equals _rdl (typically 20%) — meaning the
+            # battery has lost exactly replacement_degradation_limit_pct of its capacity.
+            # Formula: dod_fade_pct = cumulative_cycle_damage × replacement_degradation_limit_pct
             dod_fade_pct = (
                 battery_state.cumulative_cycle_damage * _rdl
                 if use_dod_model else 0.0

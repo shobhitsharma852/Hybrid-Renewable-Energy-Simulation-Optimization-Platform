@@ -86,18 +86,17 @@ def flag(name: str, condition: bool, expected: float, actual: float, unit: str =
 # ??? Component config factories ??????????????????????????????????????????????
 
 def _bat(min_soc: float = MIN_SOC, eta_pct: float = 90.0,
-         init_soc: float = 100.0, self_dis: float = 0.0) -> BatteryComponentConfig:
+         init_soc: float = 100.0) -> BatteryComponentConfig:
     return BatteryComponentConfig(
         enabled=True,
         nominal_voltage_v=VOLT,
         nominal_capacity_kwh_per_string=CAP_KWH,
         roundtrip_efficiency_pct=eta_pct,
-        max_charge_current_a=10_000.0,   # very high ? hardware limit not active
+        max_charge_current_a=10_000.0,   # very high — hardware limit not active
         max_discharge_current_a=10_000.0,
         minimum_state_of_charge_pct=min_soc,
         initial_state_of_charge_pct=init_soc,
-        self_discharge_rate_pct_per_day=self_dis,
-        throughput_kwh=1e12,             # infinite ? no degradation
+        throughput_kwh=1e12,             # infinite — no degradation
         # turn off all fade mechanisms so they don't interfere
         cycle_life_a=0.0,
         cycle_life_beta=0.0,
@@ -426,7 +425,7 @@ def test_3hour_simulation() -> list[TR]:
             temperature=PVTemperatureSettings(enabled=False),   # disable for clean numbers
         ),
         wind=WindComponentConfig(enabled=False),
-        battery=_bat(init_soc=100.0, self_dis=0.0),
+        battery=_bat(init_soc=100.0),
         converter=_conv(),
         grid=_grid(),
     )
