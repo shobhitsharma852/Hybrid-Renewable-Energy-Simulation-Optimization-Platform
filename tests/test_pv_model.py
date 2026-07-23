@@ -170,6 +170,37 @@ def test_compute_pv_power_from_resource_row() -> None:
     assert result.net_power_kw > 0.0
 
 
+def test_measured_poa_is_not_transposed_again() -> None:
+    pv = make_pv_config()
+    row = pd.Series(
+        {
+            "timestamp": pd.Timestamp("2026-07-15 12:00:00"),
+            "poa": 800.0,
+            "ghi": 600.0,
+            "temperature": 30.0,
+        }
+    )
+
+    direct = compute_pv_power_for_timestep(
+        irradiance_input_value=800.0,
+        ambient_temperature_c=30.0,
+        pv_config=pv,
+        selected_capacity_kw=100.0,
+    )
+    from_row = compute_pv_power_from_resource_row(
+        resource_row=row,
+        pv_config=pv,
+        selected_capacity_kw=100.0,
+        latitude_deg=14.59,
+        longitude_deg=76.67,
+        timezone_offset_hours=5.5,
+        time_step_hours=1.0 / 60.0,
+    )
+
+    assert from_row.irradiance_input_value == pytest.approx(800.0)
+    assert from_row.net_power_kw == pytest.approx(direct.net_power_kw)
+
+
 def test_simulate_pv_timeseries_returns_expected_shape_and_columns() -> None:
     pv = make_pv_config()
 

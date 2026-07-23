@@ -485,9 +485,10 @@ def _compute_g0_for_timestamp(
     lat: float,
     lon: float,
     timezone_offset_hours: float,
+    time_step_hours: float = 1.0,
 ) -> float:
     """
-    Compute extraterrestrial horizontal irradiance G0 (W/m²) averaged over one hourly timestep.
+    Compute extraterrestrial horizontal irradiance G0 (W/m²) averaged over one timestep.
 
     Uses HOMER's documented solar-time equation and the Duffie & Beckman /
     HOMER time-step average form for extraterrestrial horizontal radiation.
@@ -497,6 +498,16 @@ def _compute_g0_for_timestamp(
     - HOMER integrates extraterrestrial horizontal radiation over the whole time step
       using the hour angle at the beginning and end of the step.
     - This produces noticeably closer HOMER parity for capped-Kt workflows.
+
+    TIMESTEP AWARENESS
+    ------------------
+    time_step_hours is the project's actual step (1.0 hourly, 0.25 for 15-min).
+    It is used twice, and both uses are required for a correct sub-hourly G0:
+      1. The integration window is [this timestamp, this timestamp + step] —
+         and the timestamp's MINUTES are honoured, so 12:00/12:15/12:30/12:45
+         are four distinct windows rather than four copies of the 12:00-13:00 hour.
+      2. The result is divided by time_step_hours to convert the integrated
+         energy back into an average power over that (shorter) window.
     """
     n = ts.timetuple().tm_yday
     E = _eot_homer_hours(n)
@@ -508,10 +519,13 @@ def _compute_g0_for_timestamp(
     e0 = 1.0 + 0.033 * math.cos(B)
     g_on = SOLAR_CONSTANT_W_PER_M2 * e0
 
-    # HOMER works in civil time and converts to solar time. For an hourly step,
-    # compute the hour angle at the beginning and end of the hour, then integrate.
-    civil_hour_start = float(ts.hour)
-    civil_hour_end = civil_hour_start + 1.0
+    # HOMER works in civil time and converts to solar time. Compute the hour
+    # angle at the beginning and end of THIS timestep, then integrate.
+    # Minutes/seconds are included: at 15-min resolution the four steps within an
+    # hour are four different windows, so using float(ts.hour) alone would hand
+    # all four the identical hourly G0.
+    civil_hour_start = ts.hour + ts.minute / 60.0 + ts.second / 3600.0
+    civil_hour_end = civil_hour_start + time_step_hours
 
     solar_hour_start = civil_hour_start + lon / 15.0 - timezone_offset_hours + E
     solar_hour_end = civil_hour_end + lon / 15.0 - timezone_offset_hours + E
@@ -543,12 +557,35 @@ def _compute_g0_for_timestamp(
     w1 = math.radians(clipped_start_deg)
     w2 = math.radians(clipped_end_deg)
 
+    # Duffie & Beckman give the ENERGY integrated between hour angles w1 and w2 as
+    #     (12*3600/pi) * g_on * [ ... ]        (J/m²)
+    # Average power over the step = energy / (time_step_hours * 3600), which is
+    #     (12/pi) * g_on * [ ... ] / time_step_hours
+    # The previous form omitted the divisor, which is only correct when the step
+    # is exactly 1 hour.
+    # Dividing by the FULL step (not the daylight-clipped portion) is deliberate:
+    # a partially-lit sunrise step then correctly averages down toward zero.
     g0_avg = (12.0 / math.pi) * g_on * (
         math.cos(lat_r) * math.cos(dec_r) * (math.sin(w2) - math.sin(w1))
         + (w2 - w1) * math.sin(lat_r) * math.sin(dec_r)
-    )
+    ) / time_step_hours
 
     return max(0.0, g0_avg)
+
+
+def _infer_time_step_hours(timestamps: pd.Series) -> float:
+    """
+    Infer the resource timestep (hours) from the spacing of its timestamps.
+
+    Median spacing is used rather than the first difference so a single gap or
+    duplicate row cannot skew the result.  Falls back to 1.0 (hourly) when the
+    series is too short or the spacing is unusable.
+    """
+    diffs = pd.to_datetime(timestamps).diff().dropna()
+    if diffs.empty:
+        return 1.0
+    step_h = diffs.median().total_seconds() / 3600.0
+    return step_h if step_h > 0 else 1.0
 
 
 def add_clearness_index(
@@ -556,6 +593,7 @@ def add_clearness_index(
     lat: float,
     lon: float,
     timezone_offset_hours: float = 5.5,
+    time_step_hours: float | None = None,
 ) -> pd.DataFrame:
     """
     Add G0 and clearness index (Kt) columns to a resources DataFrame.
@@ -580,8 +618,14 @@ def add_clearness_index(
     """
     out = validate_resources_dataframe(df).copy()
 
+    # Infer the step from the data when the caller does not supply one, so a
+    # 15-min resource file gets a true 15-min G0 rather than the hourly value
+    # repeated across the four sub-steps.
+    if time_step_hours is None:
+        time_step_hours = _infer_time_step_hours(out["timestamp"])
+
     out["g0_w_m2"] = out["timestamp"].apply(
-        lambda t: _compute_g0_for_timestamp(t, lat, lon, timezone_offset_hours)
+        lambda t: _compute_g0_for_timestamp(t, lat, lon, timezone_offset_hours, time_step_hours)
     )
 
     out["clearness_index"] = out.apply(

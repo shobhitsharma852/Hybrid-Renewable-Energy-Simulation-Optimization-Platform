@@ -407,6 +407,9 @@ class HybridSystemSimulator:
             latitude_deg=self.inputs.latitude_deg,
             longitude_deg=self.inputs.longitude_deg,
             timezone_offset_hours=self.inputs.timezone_offset_hours,
+            # Solar geometry is timestep-dependent (interval centre + Ḡ_o window).
+            # Without this the PV chain silently assumes hourly for sub-hourly runs.
+            time_step_hours=self.inputs.time_step_hours,
         )
 
         return result.net_power_kw

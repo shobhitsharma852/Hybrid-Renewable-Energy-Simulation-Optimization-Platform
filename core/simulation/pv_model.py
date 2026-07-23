@@ -142,19 +142,50 @@ def _equation_of_time_hours(day_of_year: int) -> float:
     return eot_minutes / 60.0
 
 
+def _infer_time_step_hours_from_df(resource_df: pd.DataFrame) -> float:
+    """
+    Infer the resource timestep (hours) from the spacing of its 'timestamp' column.
+
+    Median spacing is used rather than the first difference so one gap or a
+    duplicate row cannot skew the result.  Falls back to 1.0 (hourly) when there
+    is no usable timestamp column or too few rows to measure a spacing.
+    """
+    if "timestamp" not in resource_df.columns or len(resource_df) < 2:
+        return 1.0
+    diffs = pd.to_datetime(resource_df["timestamp"], errors="coerce").diff().dropna()
+    if diffs.empty:
+        return 1.0
+    step_h = diffs.median().total_seconds() / 3600.0
+    return step_h if step_h > 0 else 1.0
+
+
 def _solar_hour_angle_deg(
     timestamp: pd.Timestamp,
     longitude_deg: float,
     timezone_offset_hours: float = 0.0,
+    time_step_hours: float = 1.0,
 ) -> float:
     """
-    Solar hour angle (degrees) at the centre of the hour interval.
+    Solar hour angle (degrees) at the centre of the timestep interval.
 
-    Resource timestamps are in civil/local standard time (e.g. IST = UTC+5.5).
+    Resource timestamps are in civil/local standard time (e.g. IST = UTC+5.5)
+    and label the START of their interval.  The hour angle is wanted at the
+    interval's CENTRE, so half a step is added.
+
+    time_step_hours is the project's step (1.0 hourly, 0.25 for 15-min).  The
+    half-step offset must scale with it: a hard-coded +0.5 centres a 1-hour
+    step correctly but pushes a 15-min step 22.5 minutes late, placing the sun
+    at the wrong position for every sub-hourly timestep.
+
     The HOMER solar-time formula is:  ts = tc + λ/15 − Zc + EoT
     where tc is civil time, λ is longitude, Zc is hours east of UTC.
     """
-    civil_hour = timestamp.hour + timestamp.minute / 60.0 + 0.5
+    civil_hour = (
+        timestamp.hour
+        + timestamp.minute / 60.0
+        + timestamp.second / 3600.0
+        + time_step_hours / 2.0
+    )
     eot_hours  = _equation_of_time_hours(timestamp.dayofyear)
     solar_time = civil_hour + longitude_deg / 15.0 - timezone_offset_hours + eot_hours
     return (solar_time - 12.0) * 15.0
@@ -207,9 +238,10 @@ def _integrated_g0_h_w_m2(
     dec_r: float,
     g_on: float,
     omega_center_r: float,
+    time_step_hours: float = 1.0,
 ) -> float:
     """
-    Time-averaged extraterrestrial horizontal irradiance (W/m²) over one hourly timestep.
+    Time-averaged extraterrestrial horizontal irradiance (W/m²) over one timestep.
 
     Implements D&B 4th ed. Eq. 2.12.1 with the daylight-window clip (ω1/ω2 → ±ωs):
         Ḡ_o = (12/π) × G_on × [cos(φ)cos(δ)(sin(ω2)−sin(ω1)) + (ω2−ω1)sin(φ)sin(δ)]
@@ -221,7 +253,11 @@ def _integrated_g0_h_w_m2(
     un-clipped approach over-predicted annual tilt gain by ~0.77%.
     This matches resources.py and the standard D&B/HOMER convention.
     """
-    half_step_r = math.pi / 24.0  # 7.5° = half of 15°/hr
+    # The sun sweeps 15°/hr, so a step of time_step_hours spans 15×step degrees
+    # and half of it is (15×step)/2 degrees = π×step/24 radians.
+    # A hard-coded π/24 (7.5°) is only right for a 1-hour step; at 15-min it
+    # integrates over a 4x-too-wide window centred on the timestep.
+    half_step_r = math.pi * time_step_hours / 24.0
     omega1_r = omega_center_r - half_step_r
     omega2_r = omega_center_r + half_step_r
 
@@ -237,10 +273,17 @@ def _integrated_g0_h_w_m2(
     if omega2_r <= omega1_r:
         return 0.0  # full nighttime timestep
 
+    # D&B Eq 2.12.1 integrates to ENERGY between ω1 and ω2:
+    #     (12*3600/π) × G_on × [ ... ]        (J/m²)
+    # Average power over the step = energy / (time_step_hours × 3600), i.e.
+    #     (12/π) × G_on × [ ... ] / time_step_hours
+    # Without the divisor the expression is only an average for a 1-hour step.
+    # Dividing by the FULL step (not the daylight-clipped part) is deliberate —
+    # it is what makes a partially-lit sunrise step average correctly downward.
     g0_avg = (12.0 / math.pi) * g_on * (
         math.cos(lat_r) * math.cos(dec_r) * (math.sin(omega2_r) - math.sin(omega1_r))
         + (omega2_r - omega1_r) * math.sin(lat_r) * math.sin(dec_r)
-    )
+    ) / time_step_hours
     return max(0.0, g0_avg)
 
 
@@ -308,6 +351,7 @@ def compute_poa_from_ghi(
     surface_azimuth_D_and_B_deg: float,
     ground_reflectance_pct: float = 20.0,
     timezone_offset_hours: float = 0.0,
+    time_step_hours: float = 1.0,
 ) -> float:
     """
     Convert GHI (W/m²) to plane-of-array irradiance (W/m²).
@@ -316,6 +360,11 @@ def compute_poa_from_ghi(
     - Erbs decomposition: GHI → beam_H + diffuse_H
     - HDKR model (Hay–Davies–Klucher–Reindl) for tilted-plane diffuse
     - Ground-reflected component via albedo
+
+    time_step_hours is the project's timestep and must be passed for sub-hourly
+    runs: it sets both the interval centre used for the solar hour angle and the
+    integration window for Ḡ_o.  Leaving it at 1.0 for 15-min data places the sun
+    22.5 minutes late and integrates Ḡ_o over a 4x-too-wide window.
 
     Returns 0 when the sun is below the horizon or GHI ≤ 0.
     Returns GHI unchanged when slope is effectively zero (flat panel).
@@ -334,7 +383,9 @@ def compute_poa_from_ghi(
 
     day_n     = _day_of_year(timestamp)
     dec_r     = math.radians(_solar_declination_deg(day_n))
-    omega_r   = math.radians(_solar_hour_angle_deg(timestamp, longitude_deg, timezone_offset_hours))
+    omega_r   = math.radians(
+        _solar_hour_angle_deg(timestamp, longitude_deg, timezone_offset_hours, time_step_hours)
+    )
 
     cos_z = _cos_zenith(lat_r, dec_r, omega_r)
 
@@ -347,7 +398,7 @@ def compute_poa_from_ghi(
     # The midpoint approximation G0×cos(θz) differs near sunrise/sunset and was
     # the source of the remaining ~0.16% annual PV generation gap.
     G0   = _extraterrestrial_radiation_w_m2(day_n)
-    G0_h = _integrated_g0_h_w_m2(lat_r, dec_r, G0, omega_r)
+    G0_h = _integrated_g0_h_w_m2(lat_r, dec_r, G0, omega_r, time_step_hours)
 
     kt = ghi_w_m2 / G0_h if G0_h > EPSILON else 0.0
     kt = max(0.0, min(kt, 1.0))  # physical bounds
@@ -561,59 +612,77 @@ def compute_pv_power_from_resource_row(
     latitude_deg: float | None = None,
     longitude_deg: float | None = None,
     timezone_offset_hours: float = 0.0,
+    time_step_hours: float = 1.0,
 ) -> PVPowerResult:
     """
     Compute PV power from one row of the resource dataframe.
 
     Irradiance pipeline:
-    1. Apply clearness-index cap to raw GHI if configured (removes NASA POWER
-       sunrise/sunset artifacts where GHI briefly exceeds G0).
-    2. If latitude, longitude, and a timestamp are available, convert effective
-       GHI to plane-of-array irradiance using Erbs + HDKR.  Otherwise use
-       effective GHI directly (flat-panel or data-less fallback).
+    1. Use measured POA directly when a POA column is present.
+    2. Otherwise apply the optional clearness-index cap to raw GHI.
+    3. Convert GHI to plane-of-array irradiance using Erbs + HDKR when
+       location and timestamp data are available.
     """
     ambient_temperature_c = _extract_ambient_temperature_from_row(resource_row)
     orientation = pv_config.orientation
 
-    # ── Step 1: effective GHI (with optional clearness-index cap) ──────────────
-    use_kt = (
-        orientation.use_clearness_index_cap
-        and "clearness_index" in resource_row.index
-        and "g0_w_m2" in resource_row.index
+    direct_poa_column = next(
+        (
+            column
+            for column in ("poa", "poa_irradiance", "poa_kw_m2")
+            if column in resource_row.index and not pd.isna(resource_row[column])
+        ),
+        None,
     )
 
-    if use_kt:
-        kt     = _safe_float(resource_row["clearness_index"], default=0.0)
-        g0     = _safe_float(resource_row["g0_w_m2"], default=0.0)
-        kt_cap = float(orientation.kt_max)
-        # Effective GHI (W/m²) = capped Kt × G0
-        effective_ghi_w_m2 = min(kt, kt_cap) * g0
+    if direct_poa_column is not None:
+        # Measured POA/GTI is already in the array plane. Transposing it as GHI
+        # would tilt the irradiance a second time and overstate/understate power.
+        irradiance_input_value = _safe_float(
+            resource_row[direct_poa_column],
+            default=0.0,
+        )
     else:
-        effective_ghi_w_m2 = _extract_irradiance_from_row(resource_row)
+        use_kt = (
+            orientation.use_clearness_index_cap
+            and "clearness_index" in resource_row.index
+            and "g0_w_m2" in resource_row.index
+        )
 
-    # ── Step 2: GHI → POA (when lat/lon and timestamp are available) ──────────
-    if (
-        latitude_deg is not None
-        and longitude_deg is not None
-        and "timestamp" in resource_row.index
-    ):
-        ts_raw = resource_row["timestamp"]
-        if not pd.isna(ts_raw):
-            slope_deg, az_DnB = _resolve_panel_angles(pv_config, float(latitude_deg))
-            irradiance_input_value = compute_poa_from_ghi(
-                ghi_w_m2=effective_ghi_w_m2,
-                timestamp=pd.Timestamp(ts_raw),
-                latitude_deg=float(latitude_deg),
-                longitude_deg=float(longitude_deg),
-                slope_deg=slope_deg,
-                surface_azimuth_D_and_B_deg=az_DnB,
-                ground_reflectance_pct=orientation.ground_reflectance_pct,
-                timezone_offset_hours=timezone_offset_hours,
-            )
+        if use_kt:
+            kt = _safe_float(resource_row["clearness_index"], default=0.0)
+            g0 = _safe_float(resource_row["g0_w_m2"], default=0.0)
+            kt_cap = float(orientation.kt_max)
+            effective_ghi_w_m2 = min(kt, kt_cap) * g0
+        else:
+            effective_ghi_w_m2 = _extract_irradiance_from_row(resource_row)
+
+        if (
+            latitude_deg is not None
+            and longitude_deg is not None
+            and "timestamp" in resource_row.index
+        ):
+            ts_raw = resource_row["timestamp"]
+            if not pd.isna(ts_raw):
+                slope_deg, az_DnB = _resolve_panel_angles(
+                    pv_config,
+                    float(latitude_deg),
+                )
+                irradiance_input_value = compute_poa_from_ghi(
+                    ghi_w_m2=effective_ghi_w_m2,
+                    timestamp=pd.Timestamp(ts_raw),
+                    latitude_deg=float(latitude_deg),
+                    longitude_deg=float(longitude_deg),
+                    slope_deg=slope_deg,
+                    surface_azimuth_D_and_B_deg=az_DnB,
+                    ground_reflectance_pct=orientation.ground_reflectance_pct,
+                    timezone_offset_hours=timezone_offset_hours,
+                    time_step_hours=time_step_hours,
+                )
+            else:
+                irradiance_input_value = effective_ghi_w_m2
         else:
             irradiance_input_value = effective_ghi_w_m2
-    else:
-        irradiance_input_value = effective_ghi_w_m2
 
     return compute_pv_power_for_timestep(
         irradiance_input_value=irradiance_input_value,
@@ -631,9 +700,14 @@ def simulate_pv_timeseries(
     latitude_deg: float | None = None,
     longitude_deg: float | None = None,
     timezone_offset_hours: float = 0.0,
+    time_step_hours: float | None = None,
 ) -> pd.DataFrame:
     """
     Simulate PV generation for the full resource dataframe.
+
+    time_step_hours defaults to None, in which case it is inferred from the
+    spacing of the resource timestamps.  This keeps sub-hourly resource files
+    correct without every caller having to pass the step explicitly.
 
     Returns a dataframe with columns:
     irradiance_input_value, irradiance_used_kw_per_m2,
@@ -641,6 +715,11 @@ def simulate_pv_timeseries(
     temperature_correction_factor, pv_power_kw
     """
     records: list[dict[str, float]] = []
+
+    # Infer the step from the timestamps when the caller does not supply one, so
+    # a 15-min resource file is not silently treated as hourly.
+    if time_step_hours is None:
+        time_step_hours = _infer_time_step_hours_from_df(resource_df)
 
     for _, row in resource_df.iterrows():
         result = compute_pv_power_from_resource_row(
@@ -650,6 +729,7 @@ def simulate_pv_timeseries(
             latitude_deg=latitude_deg,
             longitude_deg=longitude_deg,
             timezone_offset_hours=timezone_offset_hours,
+            time_step_hours=time_step_hours,
         )
         records.append({
             "irradiance_input_value":      result.irradiance_input_value,
