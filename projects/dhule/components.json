@@ -36,14 +36,14 @@
       "use_default_slope": false,
       "panel_slope_deg": 21.0,
       "use_default_azimuth": false,
-      "panel_azimuth_deg": 0.0,
+      "panel_azimuth_deg": 180.0,
       "use_clearness_index_cap": true,
       "kt_max": 0.82
     },
     "temperature": {
       "enabled": true,
       "temperature_coefficient_pct_per_degC": -0.5,
-      "nominal_operating_cell_temp_c": 47.0,
+      "nominal_operating_cell_temp_c": 45.0,
       "efficiency_stc_pct": 13.0
     }
   },
