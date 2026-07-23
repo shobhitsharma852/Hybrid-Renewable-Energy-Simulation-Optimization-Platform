@@ -1,0 +1,17 @@
+{
+  "basis": "Solar-only model resource using full 2020 leap-year SCADA GHI and ambient temperature.",
+  "model_resource": "projects/SSNL/inputs/resources.csv",
+  "model_resource_rows": 35136,
+  "model_resource_timestamps": "2020-01-01 00:00:00 to 2020-12-31 23:45:00",
+  "feb_29_included": true,
+  "wind_included": false,
+  "ws50m_value_in_model_resource": 0.0,
+  "scada_columns_used": [
+    "GHI_W",
+    "AmbientTemperature"
+  ],
+  "ghi_mean_w_m2": 195.72992002504554,
+  "daily_ghi_kwh_m2_day": 4.697518080601093,
+  "temperature_mean_c": 27.72819800204918,
+  "note_for_homer": "HOMER exports remain non-leap 8760-hour files unless regenerated separately."
+}

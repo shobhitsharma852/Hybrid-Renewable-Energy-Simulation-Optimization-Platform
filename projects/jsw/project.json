@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "name": "jsw",
+    "author": "Shobhit Sharma",
+    "description": "JSW PV-only one-minute SCADA validation project for comparison with the Python model and HOMER Pro.",
+    "currency_symbol": "\u20b9",
+    "currency_name": "INR"
+  },
+  "location": {
+    "lat": 14.59,
+    "lon": 76.67,
+    "timezone": "Asia/Kolkata"
+  },
+  "economics": {
+    "nominal_discount_rate_pct": 10.0,
+    "inflation_rate_pct": 6.0,
+    "project_lifetime_years": 25,
+    "annual_capacity_shortage": 0.0
+  },
+  "load": {
+    "scaled_annual_energy_kwh": null
+  },
+  "version": "1.0",
+  "simulation_time_step_minutes": 1,
+  "dispatch_strategy": "renewable_first"
+}
