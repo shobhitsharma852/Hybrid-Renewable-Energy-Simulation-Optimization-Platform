@@ -1,5 +1,6 @@
 import streamlit as st
 
+from dashboard.ui.feature_flags import SHOW_INSOLARE_OPTIMIZER_UI
 from dashboard.ui.formatting import formatted_number_input
 from core.components.pv import (
     PVMPPTSettings,
@@ -39,15 +40,18 @@ def render_pv_component_panel(currency_symbol: str = "₹") -> None:
             key="ui_pv_enabled",
         )
 
-        _sizing_mode_idx = 0 if st.session_state.get("ui_pv_use_search_space", True) else 1
-        _sizing_mode = st.radio(
-            "Sizing Mode",
-            ["Discrete Options", "InSolare Optimizer"],
-            index=_sizing_mode_idx,
-            horizontal=True,
-            key="ui_pv_sizing_mode",
-        )
-        use_search_space = (_sizing_mode == "Discrete Options")
+        if SHOW_INSOLARE_OPTIMIZER_UI:
+            _sizing_mode_idx = 0 if st.session_state.get("ui_pv_use_search_space", True) else 1
+            _sizing_mode = st.radio(
+                "Sizing Mode",
+                ["Discrete Options", "InSolare Optimizer"],
+                index=_sizing_mode_idx,
+                horizontal=True,
+                key="ui_pv_sizing_mode",
+            )
+            use_search_space = (_sizing_mode == "Discrete Options")
+        else:
+            use_search_space = True
         st.session_state["ui_pv_use_search_space"] = use_search_space
 
         if use_search_space:

@@ -20,6 +20,7 @@ from core.optimization.insolare_optimizer import (
 from core.optimization.optimizer import run_optimization_sweep
 from core.project import load_project
 from core.simulation.run_project_simulation import run_project_simulation
+from dashboard.ui.feature_flags import SHOW_INSOLARE_OPTIMIZER_UI
 from dashboard.ui.layout import top_bar
 from dashboard.ui.sidebar import render_left_panel
 from dashboard.ui.state import active_project_name, set_active_project_folder_name
@@ -223,24 +224,37 @@ set_active_project_folder_name(selected_project)
 currency_symbol = _get_currency_symbol(selected_project)
 
 # ── Mode selector ────────────────────────────────────────────
-view_mode = st.radio(
-    "Optimizer mode",
-    options=["Search Space", "InSolare Optimizer"],
-    horizontal=True,
-    help=(
-        "Search Space: simulates all predefined discrete component options (fast, limited).\n"
-        "InSolare Optimizer: continuous search via Differential Evolution — finds globally "
-        "optimal sizing without predefined options (~5–10 min)."
-    ),
-)
+# "InSolare Optimizer" mode is hidden behind SHOW_INSOLARE_OPTIMIZER_UI — the
+# optimizer itself (core/optimization/insolare_optimizer.py) is untouched,
+# only this dashboard entry point is gated. Flip the flag to bring it back.
+if SHOW_INSOLARE_OPTIMIZER_UI:
+    view_mode = st.radio(
+        "Optimizer mode",
+        options=["Search Space", "InSolare Optimizer"],
+        horizontal=True,
+        help=(
+            "Search Space: simulates all predefined discrete component options (fast, limited).\n"
+            "InSolare Optimizer: continuous search via Differential Evolution — finds globally "
+            "optimal sizing without predefined options (~5–10 min)."
+        ),
+    )
+else:
+    view_mode = "Search Space"
 
-c1, c2, c3, c4, c5 = st.columns([1.3, 1.5, 1.2, 1.0, 1.0])
+if SHOW_INSOLARE_OPTIMIZER_UI:
+    c1, c2, c3, c4, c5 = st.columns([1.3, 1.5, 1.2, 1.0, 1.0])
+else:
+    c1, c3, c4, c5 = st.columns([1.3, 1.2, 1.0, 1.0])
+    c2 = None
 
 with c1:
     run_search_space = st.button("Run Search Space", use_container_width=True)
 
-with c2:
-    run_insolare = st.button("Run InSolare Optimizer", use_container_width=True, type="primary")
+if SHOW_INSOLARE_OPTIMIZER_UI:
+    with c2:
+        run_insolare = st.button("Run InSolare Optimizer", use_container_width=True, type="primary")
+else:
+    run_insolare = False
 
 with c3:
     load_saved = st.button("Load Saved Outputs", use_container_width=True)
