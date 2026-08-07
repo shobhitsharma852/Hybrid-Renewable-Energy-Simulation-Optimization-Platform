@@ -1,14 +1,14 @@
 {
   "meta": {
-    "name": "jsw",
+    "name": "MH_Solvent",
     "author": "Shobhit Sharma",
-    "description": "JSW PV-only one-minute SCADA validation project for comparison with the Python model and HOMER Pro.",
-    "currency_symbol": "\u20b9",
+    "description": "MH_Solvent 3.2MWp PV plant, Bacheri Maharashtra. Real-site SCADA-validated PV component (tilt/azimuth/NOCT/derating from March-July 2026 SCADA calibration); resource data from NASA POWER (no on-site GHI sensor used in this project).",
+    "currency_symbol": "₹",
     "currency_name": "INR"
   },
   "location": {
-    "lat": 14.59,
-    "lon": 76.67,
+    "lat": 17.6441,
+    "lon": 74.9587,
     "timezone": "Asia/Kolkata"
   },
   "economics": {
@@ -21,6 +21,6 @@
     "scaled_annual_energy_kwh": null
   },
   "version": "1.0",
-  "simulation_time_step_minutes": 1,
+  "simulation_time_step_minutes": 60,
   "dispatch_strategy": "renewable_first"
 }

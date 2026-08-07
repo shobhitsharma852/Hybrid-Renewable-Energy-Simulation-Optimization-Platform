@@ -8,7 +8,7 @@
     "optimizer_kw_min": 97200.0,
     "optimizer_kw_max": 97200.0,
     "optimizer_set_limits": true,
-    "capital_cost_per_kw": 45000.0,
+    "capital_cost_per_kw": 7400.0,
     "replacement_cost_per_kw": 30000.0,
     "om_cost_per_kw_per_year": 600.0,
     "lifetime_years": 25,

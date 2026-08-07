@@ -4,6 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from dashboard.ui.feature_flags import SHOW_INSOLARE_OPTIMIZER_UI
 from dashboard.ui.components.battery_panel import render_battery_component_panel
 from dashboard.ui.components.converter_panel import render_converter_component_panel
 from dashboard.ui.components.grid_panel import render_grid_component_panel
@@ -71,7 +72,10 @@ def _render_system_summary(state: dict, currency_symbol: str) -> None:
     # PV
     pv = draft.get("pv", {})
     pv_opts = pv.get("capacity_kw_options", [0])
-    pv_use_ss = pv.get("use_search_space", True)
+    # Force True while the InSolare Optimizer UI is hidden, so stale saved
+    # projects (use_search_space=False from before it was hidden) don't show
+    # the unreachable "InSolare Optimizer" label here.
+    pv_use_ss = pv.get("use_search_space", True) or not SHOW_INSOLARE_OPTIMIZER_UI
     rows.append({
         "Component": "PV Solar",
         "Status": "Enabled" if pv.get("enabled") else "Disabled",
@@ -85,7 +89,7 @@ def _render_system_summary(state: dict, currency_symbol: str) -> None:
     wind = draft.get("wind", {})
     wind_opts = wind.get("quantity_options", [0])
     rated = wind.get("rated_capacity_kw", 0)
-    wind_use_ss = wind.get("use_search_space", True)
+    wind_use_ss = wind.get("use_search_space", True) or not SHOW_INSOLARE_OPTIMIZER_UI
     rows.append({
         "Component": "Wind",
         "Status": "Enabled" if wind.get("enabled") else "Disabled",
@@ -99,7 +103,7 @@ def _render_system_summary(state: dict, currency_symbol: str) -> None:
     bat = draft.get("battery", {})
     bat_opts = bat.get("quantity_options", [0])
     cap_per = bat.get("nominal_capacity_kwh_per_string", 0)
-    bat_use_ss = bat.get("use_search_space", True)
+    bat_use_ss = bat.get("use_search_space", True) or not SHOW_INSOLARE_OPTIMIZER_UI
     rows.append({
         "Component": "Battery",
         "Status": "Enabled" if bat.get("enabled") else "Disabled",
@@ -112,7 +116,7 @@ def _render_system_summary(state: dict, currency_symbol: str) -> None:
     # Converter
     conv = draft.get("converter", {})
     conv_opts = conv.get("capacity_kw_options", [0])
-    conv_use_ss = conv.get("use_search_space", True)
+    conv_use_ss = conv.get("use_search_space", True) or not SHOW_INSOLARE_OPTIMIZER_UI
     rows.append({
         "Component": "Converter",
         "Status": "Enabled" if conv.get("enabled") else "Disabled",
