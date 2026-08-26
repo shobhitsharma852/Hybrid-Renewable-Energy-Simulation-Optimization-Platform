@@ -82,10 +82,10 @@ def test_simulation_results_include_real_timestamps() -> None:
     )
 
     results = HybridSystemSimulator(inputs).run()
-    hourly_df = results.to_dataframe()
+    timestep_df = results.to_dataframe()
 
-    assert "timestamp" in hourly_df.columns
-    assert list(pd.to_datetime(hourly_df["timestamp"])) == list(timestamps)
+    assert "timestamp" in timestep_df.columns
+    assert list(pd.to_datetime(timestep_df["timestamp"])) == list(timestamps)
 
 
 def test_simulator_fails_when_load_and_resources_have_different_lengths() -> None:

@@ -301,8 +301,8 @@ def _run_candidate(
         sim_results = sim.run()
 
         # Energy balance check
-        hourly_df = sim_results.to_dataframe()
-        balance, _ = validate_energy_balance(hourly_df)
+        timestep_df = sim_results.to_dataframe()
+        balance, _ = validate_energy_balance(timestep_df)
 
         # Economics
         econ = evaluate_candidate_economics(

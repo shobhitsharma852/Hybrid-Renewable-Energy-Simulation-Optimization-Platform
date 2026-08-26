@@ -132,14 +132,14 @@ def test_run_project_simulation_returns_results() -> None:
         ),
     )
 
-    hourly_df = results.to_dataframe()
+    timestep_df = results.to_dataframe()
 
     assert results is not None
-    assert hourly_df is not None
-    assert len(hourly_df) > 0
+    assert timestep_df is not None
+    assert len(timestep_df) > 0
 
     expected_columns = {
-        "hour_index",
+        "step_index",
         "load_kw",
         "pv_kw",
         "wind_kw",
@@ -157,7 +157,7 @@ def test_run_project_simulation_returns_results() -> None:
         "rectifier_loss_kw",
     }
 
-    assert expected_columns.issubset(set(hourly_df.columns))
+    assert expected_columns.issubset(set(timestep_df.columns))
 
 
 def test_run_project_simulation_passes_energy_balance() -> None:
@@ -192,21 +192,21 @@ def test_save_simulation_outputs_creates_files() -> None:
         ),
     )
 
-    hourly_path, summary_path = _with_cwd(
+    timestep_path, summary_path = _with_cwd(
         project_root,
         lambda: save_simulation_outputs(
             project_name=project_name,
             results=results,
         ),
     )
-    hourly_path = project_root / hourly_path
+    timestep_path = project_root / timestep_path
     summary_path = project_root / summary_path
 
-    assert hourly_path.exists()
+    assert timestep_path.exists()
     assert summary_path.exists()
 
-    saved_hourly_df = pd.read_csv(hourly_path)
-    assert len(saved_hourly_df) > 0
+    saved_timestep_df = pd.read_csv(timestep_path)
+    assert len(saved_timestep_df) > 0
 
     with open(summary_path, "r", encoding="utf-8") as f:
         summary_data = json.load(f)
@@ -236,8 +236,8 @@ def test_run_project_simulation_with_save_outputs_creates_files() -> None:
     assert results is not None
 
     outputs_dir = project_root / "projects" / project_name / "outputs"
-    hourly_path = outputs_dir / "simulation_hourly.csv"
+    timestep_path = outputs_dir / "simulation_timesteps.csv"
     summary_path = outputs_dir / "simulation_summary.json"
 
-    assert hourly_path.exists()
+    assert timestep_path.exists()
     assert summary_path.exists()

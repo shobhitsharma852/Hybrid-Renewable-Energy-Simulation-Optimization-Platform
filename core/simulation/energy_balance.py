@@ -19,7 +19,7 @@ class EnergyBalanceCheckResult:
 
 
 def build_energy_balance_dataframe(
-    hourly_df: pd.DataFrame,
+    timestep_df: pd.DataFrame,
     *,
     include_losses: bool = True,
 ) -> pd.DataFrame:
@@ -49,13 +49,13 @@ def build_energy_balance_dataframe(
         "excess_energy_kw",
     ]
 
-    missing = [col for col in required_columns if col not in hourly_df.columns]
+    missing = [col for col in required_columns if col not in timestep_df.columns]
     if missing:
         raise ValueError(
-            f"Hourly dataframe is missing required energy balance columns: {missing}"
+            f"Timestep dataframe is missing required energy balance columns: {missing}"
         )
 
-    df = hourly_df.copy()
+    df = timestep_df.copy()
 
     for col in required_columns:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
@@ -99,7 +99,7 @@ def build_energy_balance_dataframe(
 
 
 def validate_energy_balance(
-    hourly_df: pd.DataFrame,
+    timestep_df: pd.DataFrame,
     *,
     tolerance_kw: float = DEFAULT_ENERGY_BALANCE_TOLERANCE_KW,
     include_losses: bool = True,
@@ -107,7 +107,7 @@ def validate_energy_balance(
     tolerance_kw = max(0.0, float(tolerance_kw))
 
     balance_df = build_energy_balance_dataframe(
-        hourly_df,
+        timestep_df,
         include_losses=include_losses,
     )
 

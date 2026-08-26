@@ -29,15 +29,17 @@ EPSILON: float = 1e-9
 
 
 @dataclass(frozen=True)
-class CandidateSimulationResult:
+class CandidateSimulationResult:        #“For every candidate design I simulate, I need one box containing all its results.”
     candidate_id: int
     design: DesignPoint
 
+    #Load results
     total_load_kwh: float = 0.0
     total_served_load_kwh: float = 0.0
     total_unmet_load_kwh: float = 0.0
     unmet_load_pct: float = 0.0
 
+    #Energy-flow results
     total_excess_energy_kwh: float = 0.0
     total_pv_generation_kwh: float = 0.0
     total_wind_generation_kwh: float = 0.0
@@ -46,9 +48,13 @@ class CandidateSimulationResult:
     total_battery_charge_kwh: float = 0.0
     total_battery_discharge_kwh: float = 0.0
 
+
+    #Renewable fractions
     renewable_fraction: float = 0.0
     gross_renewable_fraction: float = 0.0
 
+
+    #Constraint metrics
     annual_capacity_shortage_pct: float = 0.0
     total_capacity_shortage_kwh: float = 0.0
     total_reserve_shortfall_kwh: float = 0.0
@@ -58,12 +64,14 @@ class CandidateSimulationResult:
     max_reserve_shortfall_kw: float = 0.0
     reserve_shortfall_hours: int = 0
 
+    #Constraint pass/fail
     passes_capacity_shortage: bool = False
     passes_renewable_fraction: bool = False
     passes_operating_reserve: bool = False
     is_feasible: bool = False
     failure_reasons: tuple[str, ...] = field(default_factory=tuple)
 
+    #Economic metrics
     direct_capital_cost: float = 0.0
     annual_fixed_om_cost: float = 0.0
     annual_grid_net_cost: float = 0.0
@@ -74,17 +82,21 @@ class CandidateSimulationResult:
     net_present_cost: float = 0.0
     levelized_cost_of_energy: float = 0.0
 
+    #Energy-balance validation
     energy_balance_passes: bool = False
     energy_balance_failed_rows: int = 0
     energy_balance_max_abs_mismatch_kw: float = 0.0
 
+    #Did the simulation actually work?
     run_success: bool = True
     error_message: str | None = None
 
 
+                                                                        
+                                                                            
 @dataclass
-class OptimizationSweepResult:
-    project_name: str
+class OptimizationSweepResult:                                           #CandidateSimulationResult = results for one candidate
+    project_name: str                                                    #OptimizationSweepResult = results for all candidates
     constraints_used: OptimizationConstraints
     economic_assumptions_used: EconomicAssumptions
     total_raw_combinations: int = 0

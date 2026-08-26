@@ -12,10 +12,10 @@ class CandidateGenerationResult:
     """
     Stores generated design candidates plus some simple diagnostics.
     """
-    candidates: list[DesignPoint] = field(default_factory=list)
-    total_raw_combinations: int = 0
-    total_valid_candidates: int = 0
-    total_filtered_out: int = 0
+    candidates: list[DesignPoint] = field(default_factory=list)  #Create a field called candidates that will contain a list of DesignPoint objects, starting with an empty list by default.
+    total_raw_combinations: int = 0 #How many combinations did product() generate before filtering?
+    total_valid_candidates: int = 0 #How many of those combinations survived the validation filter?
+    total_filtered_out: int = 0 #How many combinations were filtered out or rejected?
 
 
 def _unique_sorted_float_options(values: list[float]) -> list[float]:
@@ -103,7 +103,7 @@ def generate_design_candidates(
         )
 
         if _is_obviously_invalid_candidate(candidate):
-            continue
+            continue                                           #Skip this candidate if it fails the lightweight pre-filter check.
 
         candidates.append(candidate)
 

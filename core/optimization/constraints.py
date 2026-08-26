@@ -16,7 +16,7 @@ VERY_LARGE_POWER_KW: float = 1e12
 
 @dataclass(frozen=True)
 class OptimizationConstraints:
-    # HOMER-like defaults from your screenshot
+    # HOMER-like defaults 
     max_annual_capacity_shortage_pct: float = 0.0
     min_renewable_fraction_pct: float = 0.0
 
@@ -146,11 +146,11 @@ def _evaluate_operating_reserve(
     if not constraints.enforce_operating_reserve:
         return True, 0.0, 0.0, 0.0, 0.0, 0
 
-    hourly_records = simulation_results.hourly_records
-    if not hourly_records:
+    timestep_records = simulation_results.timestep_records
+    if not timestep_records:
         return True, 0.0, 0.0, 0.0, 0.0, 0
 
-    annual_peak_load_kw = max(float(r.load_kw) for r in hourly_records)
+    annual_peak_load_kw = max(float(r.load_kw) for r in timestep_records)
 
     max_required_reserve_kw = 0.0
     min_available_reserve_kw = float("inf")
@@ -158,13 +158,25 @@ def _evaluate_operating_reserve(
     total_reserve_shortfall_kwh = 0.0
     reserve_shortfall_hours = 0
 
-    for record in hourly_records:
+    for record in timestep_records:
         required_reserve_kw = (
-            float(record.load_kw) * constraints.reserve_load_pct / 100.0
-            + annual_peak_load_kw * constraints.reserve_annual_peak_pct / 100.0
+            float(record.load_kw) * constraints.reserve_load_pct / 100.0          
+            + annual_peak_load_kw * constraints.reserve_annual_peak_pct / 100.0   # Annual peak load reserve requirement, So there is no .load_kw in the record, but we can get the annual peak load from the simulation results
             + float(record.pv_kw) * constraints.reserve_solar_pct / 100.0
             + float(record.wind_kw) * constraints.reserve_wind_pct / 100.0
         )
+
+        '''
+        Variable	                Meaning
+        record.load_kw	            Load during the current hour
+        annual_peak_load_kw	        Maximum load during the year
+        record.pv_kw	            PV generation during current hour
+        record.wind_kw	            Wind generation during current hour
+        reserve_load_pct	        Reserve % based on current load
+        reserve_annual_peak_pct     Reserve % based on annual peak
+        reserve_solar_pct	        Reserve % based on PV output
+        reserve_wind_pct	        Reserve % based on wind output
+        '''
 
         grid_headroom_kw = _grid_reserve_headroom_kw(record, components.grid)
 

@@ -13,20 +13,20 @@ def main() -> None:
         save_outputs=True,
     )
 
-    hourly_df = results.to_dataframe()
+    timestep_df = results.to_dataframe()
 
     print("\n--- Project Simulation Run: Manual Check ---")
     print(f"Project: {project_name}")
-    print(f"Hourly rows: {len(hourly_df)}")
-    print("\n--- Hourly Preview ---")
-    print(hourly_df.head(10).to_string(index=False))
+    print(f"Timestep rows: {len(timestep_df)}")
+    print("\n--- Timestep Preview ---")
+    print(timestep_df.head(10).to_string(index=False))
 
     print("\n--- Summary ---")
     print(results.summary)
 
     outputs_dir = Path("projects") / project_name / "outputs"
     print("\n--- Output Files ---")
-    print(f"Hourly CSV exists: {(outputs_dir / 'simulation_hourly.csv').exists()}")
+    print(f"Timestep CSV exists: {(outputs_dir / 'simulation_timesteps.csv').exists()}")
     print(f"Summary JSON exists: {(outputs_dir / 'simulation_summary.json').exists()}")
 
 

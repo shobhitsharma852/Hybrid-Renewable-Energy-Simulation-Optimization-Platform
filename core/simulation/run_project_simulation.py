@@ -236,20 +236,20 @@ def save_simulation_outputs(
 ) -> tuple[Path, Path]:
     outputs_dir = _ensure_outputs_dir(project_name)
 
-    hourly_path = outputs_dir / "simulation_hourly.csv"
+    timestep_path = outputs_dir / "simulation_timesteps.csv"
     summary_path = outputs_dir / "simulation_summary.json"
 
-    hourly_df = results.to_dataframe()
-    hourly_df.to_csv(hourly_path, index=False)
+    timestep_df = results.to_dataframe()
+    timestep_df.to_csv(timestep_path, index=False)
 
     summary_dict = asdict(results.summary)
-    balance_result, _ = validate_energy_balance(hourly_df)
+    balance_result, _ = validate_energy_balance(timestep_df)
     summary_dict["energy_balance"] = asdict(balance_result)
 
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary_dict, f, indent=4)
 
-    return hourly_path, summary_path
+    return timestep_path, summary_path
 
 
 def run_project_simulation(

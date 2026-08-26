@@ -9,7 +9,7 @@ import pandas as pd
 
 
 PROJECT_DIR = Path("projects/jsw")
-SIMULATION_PATH = PROJECT_DIR / "outputs" / "simulation_hourly.csv"
+SIMULATION_PATH = PROJECT_DIR / "outputs" / "simulation_timesteps.csv"
 SCADA_PATH = PROJECT_DIR / "inputs" / "scada_actual.csv"
 
 

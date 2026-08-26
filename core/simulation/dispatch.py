@@ -51,7 +51,7 @@ class DispatchResult:
 
     battery_soc_pct
         Kept as a standalone field for convenience — used directly when
-        building HourlySimulationRecord without unpacking the state object.
+        building SimulationTimestepRecord without unpacking the state object.
     """
     renewable_kw: float
     served_load_kw: float

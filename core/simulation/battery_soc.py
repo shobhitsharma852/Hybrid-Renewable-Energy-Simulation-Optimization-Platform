@@ -57,7 +57,7 @@ class BatteryState:
     """
     soc_pct: float
     effective_capacity_kwh: float
-    cumulative_throughput_kwh: float = 0.0
+    cumulative_throughput_kwh: float = 0.0    # kWh of energy that has physically passed through the battery since simulation start.
     soh_pct: float = 100.0
 
     # DoD-based cycle damage tracking (Miner's rule).
@@ -171,7 +171,7 @@ def apply_capacity_fade(
         Used as the EFC denominator and as the 100%-SoH reference.
     elapsed_hours : float
         Total simulation hours elapsed so far (used for calendar aging).
-        Typically (hour_index + 1) × time_step_hours.
+        Typically (step_index + 1) × time_step_hours.
     end_of_life_soh_pct : float
         SoH floor — capacity will not fall below this × nominal.
         Typically 80.0 per IEC 62619:2022.

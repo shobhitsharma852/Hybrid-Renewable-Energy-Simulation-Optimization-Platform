@@ -10,7 +10,11 @@ from core.optimization.constraints import (
     evaluate_candidate_constraints,
 )
 from core.optimization.design_point import DesignPoint
-from core.simulation.results import HourlySimulationRecord, SimulationResults, SimulationSummary
+from core.simulation.results import (
+    SimulationResults,
+    SimulationSummary,
+    SimulationTimestepRecord,
+)
 
 
 def _zero_design() -> DesignPoint:
@@ -25,9 +29,9 @@ def _zero_design() -> DesignPoint:
 def test_capacity_shortage_includes_operating_reserve_shortfall():
     components = ComponentsConfig(grid=GridComponentConfig(enabled=False))
     results = SimulationResults(
-        hourly_records=[
-            HourlySimulationRecord(
-                hour_index=0,
+        timestep_records=[
+            SimulationTimestepRecord(
+                step_index=0,
                 timestamp=None,
                 load_kw=100.0,
                 pv_kw=0.0,

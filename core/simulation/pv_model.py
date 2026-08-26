@@ -4,7 +4,7 @@ from __future__ import annotations
 # core/simulation/pv_model.py
 #
 # Purpose:
-#   PV generation model for hourly hybrid simulation.
+#   PV generation model for timestep-based hybrid simulation.
 #
 # What this file does:
 #   1. Resolve panel tilt and azimuth from config

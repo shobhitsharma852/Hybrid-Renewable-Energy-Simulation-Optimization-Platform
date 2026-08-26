@@ -48,14 +48,14 @@ def main() -> None:
 
     simulator = HybridSystemSimulator(inputs)
     results = simulator.run()
-    hourly_df = results.to_dataframe()
+    timestep_df = results.to_dataframe()
 
     print("\n--- Hourly Simulation Output ---")
-    print(hourly_df.to_string(index=False))
+    print(timestep_df.to_string(index=False))
 
     print("\n--- Energy Balance Check (with explicit losses) ---")
     check_result, balance_df = validate_energy_balance(
-        hourly_df,
+        timestep_df,
         tolerance_kw=1e-6,
         include_losses=True,
     )

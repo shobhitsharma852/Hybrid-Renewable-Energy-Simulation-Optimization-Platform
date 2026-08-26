@@ -52,8 +52,14 @@ def _list_projects() -> list[str]:
         return []
     return sorted(p.name for p in root.iterdir() if p.is_dir() and (p / "project.json").exists())
 
-def _hourly_path(name: str) -> Path:
-    return Path("projects") / name / "outputs" / "simulation_hourly.csv"
+def _timestep_path(name: str) -> Path:
+    outputs_dir = Path("projects") / name / "outputs"
+    timestep_path = outputs_dir / "simulation_timesteps.csv"
+    if timestep_path.exists():
+        return timestep_path
+
+    # Compatibility with simulations saved before the timestep terminology change.
+    return outputs_dir / "simulation_hourly.csv"
 
 def _summary_path(name: str) -> Path:
     return Path("projects") / name / "outputs" / "simulation_summary.json"
@@ -62,8 +68,8 @@ def _economics_path(name: str) -> Path:
     return Path("projects") / name / "outputs" / "results_economics.json"
 
 def _load_outputs(name: str):
-    hp, sp = _hourly_path(name), _summary_path(name)
-    hdf   = pd.read_csv(hp) if hp.exists() else None
+    tp, sp = _timestep_path(name), _summary_path(name)
+    hdf   = pd.read_csv(tp) if tp.exists() else None
     sdict = json.loads(sp.read_text("utf-8")) if sp.exists() else None
     return hdf, sdict
 
@@ -389,14 +395,12 @@ def _heatmap(values: np.ndarray, title: str, unit: str,
     return _style_figure(fig)
 
 
-def _monthly_bar(hourly_df: pd.DataFrame, cols: list[str], names: list[str],
+def _monthly_bar(timestep_df: pd.DataFrame, cols: list[str], names: list[str],
                  colors: list[str], title: str, height: int = 360) -> go.Figure:
-    """Monthly stacked bar chart from hourly DataFrame."""
-    df = hourly_df.copy()
+    """Monthly stacked bar chart from a per-timestep DataFrame."""
+    df = timestep_df.copy()
     df["_m"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.month
-    timestamps = pd.to_datetime(df["timestamp"], errors="coerce")
-    valid_diffs = timestamps.diff().dt.total_seconds().dropna()
-    dt_hours = float(valid_diffs.median() / 3600.0) if not valid_diffs.empty else 1.0
+    dt_hours = _infer_timestep_hours(df)
     mnames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     monthly = (
         df.groupby("_m")[cols].sum().reindex(range(1, 13), fill_value=0)
@@ -416,12 +420,12 @@ def _monthly_bar(hourly_df: pd.DataFrame, cols: list[str], names: list[str],
     return _style_figure(fig)
 
 
-def _dod_histogram(hourly_df: pd.DataFrame, height: int = 280) -> go.Figure:
+def _dod_histogram(timestep_df: pd.DataFrame, height: int = 280) -> go.Figure:
     """Depth-of-Discharge cycle distribution from SOC + discharge timeseries."""
     dod_values: list[float] = []
-    if "battery_soc_pct" in hourly_df.columns and "battery_discharge_dc_kw" in hourly_df.columns:
-        soc   = hourly_df["battery_soc_pct"].values
-        disch = hourly_df["battery_discharge_dc_kw"].values
+    if "battery_soc_pct" in timestep_df.columns and "battery_discharge_dc_kw" in timestep_df.columns:
+        soc   = timestep_df["battery_soc_pct"].values
+        disch = timestep_df["battery_discharge_dc_kw"].values
         in_disch = False
         peak_soc = float(soc[0])
         for i in range(len(soc)):
@@ -452,9 +456,9 @@ def _dod_histogram(hourly_df: pd.DataFrame, height: int = 280) -> go.Figure:
     return _style_figure(fig)
 
 
-def _monthly_soc_box(hourly_df: pd.DataFrame, height: int = 280) -> go.Figure:
+def _monthly_soc_box(timestep_df: pd.DataFrame, height: int = 280) -> go.Figure:
     """Monthly battery SOC box plots."""
-    df = hourly_df.copy()
+    df = timestep_df.copy()
     df["_m"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.month
     mnames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     fig = go.Figure()
@@ -565,7 +569,20 @@ def _cash_flow_chart(econ_payload: dict, components_cfg, summary_dict: dict,
     return _style_figure(fig)
 
 
-def _prepare_hourly(df: pd.DataFrame) -> pd.DataFrame:
+def _infer_timestep_hours(timestep_df: pd.DataFrame) -> float:
+    """Infer timestep duration from timestamps, falling back to one hour."""
+    if "timestamp" not in timestep_df.columns:
+        return 1.0
+
+    timestamps = pd.to_datetime(timestep_df["timestamp"], errors="coerce")
+    valid_diffs = timestamps.diff().dt.total_seconds().dropna()
+    positive_diffs = valid_diffs[valid_diffs > 0.0]
+    if positive_diffs.empty:
+        return 1.0
+    return float(positive_diffs.median() / 3600.0)
+
+
+def _prepare_timesteps(df: pd.DataFrame) -> pd.DataFrame:
     """Parse types and add derived columns (inverter_output_kw, rectifier_output_kw)."""
     df = df.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
@@ -701,17 +718,18 @@ with c_btn:
 # ============================================================
 # DATA LOADING
 # ============================================================
-hourly_df, summary_dict = _load_outputs(selected_project)
+timestep_df, summary_dict = _load_outputs(selected_project)
 econ_payload            = _load_economics(selected_project)
 
-if hourly_df is None or summary_dict is None:
+if timestep_df is None or summary_dict is None:
     st.warning(
         "No simulation outputs found.  \n"
         "Go to **Optimization** → select a candidate → **Send Selected Candidate to Results**."
     )
     st.stop()
 
-hourly_df = _prepare_hourly(hourly_df)
+timestep_df = _prepare_timesteps(timestep_df)
+timestep_hours = _infer_timestep_hours(timestep_df)
 
 try:
     components_cfg = load_components(Path("projects") / selected_project)
@@ -758,7 +776,7 @@ with _hdr_kpi:
 st.divider()
 
 with st.expander("Output file paths", expanded=False):
-    st.code(str(_hourly_path(selected_project)))
+    st.code(str(_timestep_path(selected_project)))
     st.code(str(_summary_path(selected_project)))
 
 # ============================================================
@@ -940,12 +958,12 @@ with tab_elec:
             ("pv_kw",          "PV",          "#f6a623"),
             ("wind_kw",        "Wind",        "#26a269"),
             ("grid_import_kw", "Grid Import", "#7a7a7a"),
-        ] if col in hourly_df.columns
+        ] if col in timestep_df.columns
     ]
     if avail_sources:
         cols, names, colors = zip(*avail_sources)
         st.plotly_chart(
-            _monthly_bar(hourly_df, list(cols), list(names), list(colors),
+            _monthly_bar(timestep_df, list(cols), list(names), list(colors),
                          "Monthly Electric Production", height=350),
             use_container_width=True,
         )
@@ -994,10 +1012,10 @@ with tab_renew:
 
     with right:
         # ── HOMER-style instantaneous renewable penetration heatmaps ─────────
-        if "pv_kw" in hourly_df.columns and "wind_kw" in hourly_df.columns:
-            _re_kw  = hourly_df["pv_kw"].values + hourly_df["wind_kw"].values
-            _ld_kw  = hourly_df["load_kw"].values if "load_kw" in hourly_df.columns else np.ones_like(_re_kw)
-            _gi_kw  = hourly_df["grid_import_kw"].values if "grid_import_kw" in hourly_df.columns else np.zeros_like(_re_kw)
+        if "pv_kw" in timestep_df.columns and "wind_kw" in timestep_df.columns:
+            _re_kw  = timestep_df["pv_kw"].values + timestep_df["wind_kw"].values
+            _ld_kw  = timestep_df["load_kw"].values if "load_kw" in timestep_df.columns else np.ones_like(_re_kw)
+            _gi_kw  = timestep_df["grid_import_kw"].values if "grid_import_kw" in timestep_df.columns else np.zeros_like(_re_kw)
 
             # Metric 1: RE output ÷ load (%, can exceed 100 when there is surplus)
             _re_vs_load = np.where(_ld_kw > EPSILON, _re_kw / _ld_kw * 100.0, 0.0)
@@ -1008,7 +1026,7 @@ with tab_renew:
 
             st.plotly_chart(
                 _heatmap(_re_vs_load, "Instantaneous RE Output / Load", "%",
-                         "RdYlGn", height=370, timestamps=hourly_df["timestamp"]),
+                         "RdYlGn", height=370, timestamps=timestep_df["timestamp"]),
                 use_container_width=True,
             )
             st.markdown(
@@ -1021,7 +1039,7 @@ with tab_renew:
             )
             st.plotly_chart(
                 _heatmap(_re_vs_gen, "Instantaneous RE Fraction of Generation", "%",
-                         "RdYlGn", height=370, timestamps=hourly_df["timestamp"]),
+                         "RdYlGn", height=370, timestamps=timestep_df["timestamp"]),
                 use_container_width=True,
             )
             st.markdown(
@@ -1032,11 +1050,11 @@ with tab_renew:
                 "</div>",
                 unsafe_allow_html=True,
             )
-        elif "renewable_kw" in hourly_df.columns:
+        elif "renewable_kw" in timestep_df.columns:
             st.plotly_chart(
-                _heatmap(hourly_df["renewable_kw"].values,
+                _heatmap(timestep_df["renewable_kw"].values,
                          "Renewable Power (kW)", "kW", "YlGn", height=420,
-                         timestamps=hourly_df["timestamp"]),
+                         timestamps=timestep_df["timestamp"]),
                 use_container_width=True,
             )
 
@@ -1127,16 +1145,16 @@ with tab_bat:
     # SOC heatmap left, DoD histogram + monthly box right
     left, right = st.columns([1.4, 1])
     with left:
-        if "battery_soc_pct" in hourly_df.columns:
+        if "battery_soc_pct" in timestep_df.columns:
             st.plotly_chart(
-                _heatmap(hourly_df["battery_soc_pct"].values,
+                _heatmap(timestep_df["battery_soc_pct"].values,
                          "Battery State of Charge (%)", "%", "RdYlGn", height=390,
-                         timestamps=hourly_df["timestamp"]),
+                         timestamps=timestep_df["timestamp"]),
                 use_container_width=True,
             )
     with right:
-        if "battery_soc_pct" in hourly_df.columns:
-            st.plotly_chart(_monthly_soc_box(hourly_df, height=390), use_container_width=True)
+        if "battery_soc_pct" in timestep_df.columns:
+            st.plotly_chart(_monthly_soc_box(timestep_df, height=390), use_container_width=True)
 
 
 # ── TAB 6: PV ────────────────────────────────────────────────────────────────
@@ -1155,8 +1173,11 @@ with tab_pv:
     load_kwh_pv = _safe(summary_dict, "total_load_kwh")
     pv_penetration = pv_kwh / load_kwh_pv * 100 if load_kwh_pv > EPSILON else 0.0
 
-    pv_max_kw = float(hourly_df["pv_kw"].max()) if "pv_kw" in hourly_df.columns else 0.0
-    pv_hrs_op = int((hourly_df["pv_kw"] > 0).sum()) if "pv_kw" in hourly_df.columns else 0
+    pv_max_kw = float(timestep_df["pv_kw"].max()) if "pv_kw" in timestep_df.columns else 0.0
+    pv_hrs_op = (
+        float((timestep_df["pv_kw"] > 0).sum()) * timestep_hours
+        if "pv_kw" in timestep_df.columns else 0.0
+    )
 
     # Levelized cost using capital recovery factor (matches HOMER's NPC-based method)
     proj_life = float(econ_payload.get("project_life_years", 20)) if econ_payload else 20.0
@@ -1186,10 +1207,10 @@ with tab_pv:
             ("Levelized Cost",    _fmt(pv_lcoe, 2),    f"{cur}/kWh"),
         ])
 
-    if "pv_kw" in hourly_df.columns:
+    if "pv_kw" in timestep_df.columns:
         st.plotly_chart(
-            _heatmap(hourly_df["pv_kw"].values, "PV Power Output", "kW", "YlOrRd",
-                     height=390, timestamps=hourly_df["timestamp"]),
+            _heatmap(timestep_df["pv_kw"].values, "PV Power Output", "kW", "YlOrRd",
+                     height=390, timestamps=timestep_df["timestamp"]),
             use_container_width=True,
         )
 
@@ -1210,8 +1231,11 @@ with tab_wind:
     load_kwh_wnd   = _safe(summary_dict, "total_load_kwh")
     wnd_penetration = wind_kwh / load_kwh_wnd * 100 if load_kwh_wnd > EPSILON else 0.0
 
-    wnd_max_kw = float(hourly_df["wind_kw"].max()) if "wind_kw" in hourly_df.columns else 0.0
-    wnd_hrs_op = int((hourly_df["wind_kw"] > 0).sum()) if "wind_kw" in hourly_df.columns else 0
+    wnd_max_kw = float(timestep_df["wind_kw"].max()) if "wind_kw" in timestep_df.columns else 0.0
+    wnd_hrs_op = (
+        float((timestep_df["wind_kw"] > 0).sum()) * timestep_hours
+        if "wind_kw" in timestep_df.columns else 0.0
+    )
 
     # Levelized cost using capital recovery factor (reuse proj_life / crf from PV tab if in scope)
     # proj_life and crf are defined above in the PV tab; recompute here for safety
@@ -1241,10 +1265,10 @@ with tab_wind:
             ("Levelized Cost",    _fmt(wnd_lcoe, 2),        f"{cur}/kWh"),
         ])
 
-    if "wind_kw" in hourly_df.columns:
+    if "wind_kw" in timestep_df.columns:
         st.plotly_chart(
-            _heatmap(hourly_df["wind_kw"].values, "Wind Turbine Power Output", "kW", "Blues",
-                     height=390, timestamps=hourly_df["timestamp"]),
+            _heatmap(timestep_df["wind_kw"].values, "Wind Turbine Power Output", "kW", "Blues",
+                     height=390, timestamps=timestep_df["timestamp"]),
             use_container_width=True,
         )
 
@@ -1272,19 +1296,19 @@ with tab_grid:
 
     c1, c2 = st.columns(2)
     with c1:
-        if "grid_import_kw" in hourly_df.columns:
+        if "grid_import_kw" in timestep_df.columns:
             st.plotly_chart(
-                _heatmap(hourly_df["grid_import_kw"].values,
+                _heatmap(timestep_df["grid_import_kw"].values,
                          "Grid Import (kW)", "kW", "Reds", height=400,
-                         timestamps=hourly_df["timestamp"]),
+                         timestamps=timestep_df["timestamp"]),
                 use_container_width=True,
             )
     with c2:
-        if "grid_export_kw" in hourly_df.columns:
+        if "grid_export_kw" in timestep_df.columns:
             st.plotly_chart(
-                _heatmap(hourly_df["grid_export_kw"].values,
+                _heatmap(timestep_df["grid_export_kw"].values,
                          "Grid Export (kW)", "kW", "Blues", height=400,
-                         timestamps=hourly_df["timestamp"]),
+                         timestamps=timestep_df["timestamp"]),
                 use_container_width=True,
             )
 
@@ -1328,8 +1352,14 @@ with tab_conv:
     rect_input  = _safe(summary_dict, "total_rectifier_input_kwh",  _rect_ac_from_loss)
     rect_eff    = rect_output / rect_input * 100 if rect_input > EPSILON else 0.0
 
-    inv_hrs  = int((hourly_df["inverter_output_kw"]  > 0.1).sum()) if "inverter_output_kw"  in hourly_df.columns else 0
-    rect_hrs = int((hourly_df["battery_charge_kw"]   > 0.1).sum()) if "battery_charge_kw"   in hourly_df.columns else 0
+    inv_hrs = (
+        float((timestep_df["inverter_output_kw"] > 0.1).sum()) * timestep_hours
+        if "inverter_output_kw" in timestep_df.columns else 0.0
+    )
+    rect_hrs = (
+        float((timestep_df["battery_charge_kw"] > 0.1).sum()) * timestep_hours
+        if "battery_charge_kw" in timestep_df.columns else 0.0
+    )
     inv_cf   = inv_output  / (conv_kw * 8760) * 100 if conv_kw > EPSILON else 0.0
     rect_cf  = rect_output / (conv_kw * 8760) * 100 if conv_kw > EPSILON else 0.0
 
@@ -1347,11 +1377,11 @@ with tab_conv:
             ("Lifetime",          _fmt(conv_life, 0),     "yr"),
         ], "Inverter (DC to AC)")
 
-        if "inverter_output_kw" in hourly_df.columns:
+        if "inverter_output_kw" in timestep_df.columns:
             st.plotly_chart(
-                _heatmap(hourly_df["inverter_output_kw"].values,
+                _heatmap(timestep_df["inverter_output_kw"].values,
                          "Inverter Output (kW)", "kW", "YlOrRd", height=390,
-                         timestamps=hourly_df["timestamp"]),
+                         timestamps=timestep_df["timestamp"]),
                 use_container_width=True,
             )
     with c2:
@@ -1366,10 +1396,10 @@ with tab_conv:
             ("Capacity Factor",   _fmt(rect_cf, 2),        "%"),
         ], "Rectifier (AC to DC)")
 
-        if "rectifier_output_kw" in hourly_df.columns:
+        if "rectifier_output_kw" in timestep_df.columns:
             st.plotly_chart(
-                _heatmap(hourly_df["rectifier_output_kw"].values,
+                _heatmap(timestep_df["rectifier_output_kw"].values,
                          "Rectifier DC Output (kW)", "kW", "Blues", height=390,
-                         timestamps=hourly_df["timestamp"]),
+                         timestamps=timestep_df["timestamp"]),
                 use_container_width=True,
             )

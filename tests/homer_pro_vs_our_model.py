@@ -19,7 +19,7 @@ Step 2 — Export from HOMER Pro:
 
 Step 3 — Run our model:
     - Run run_project_simulation() on your project
-    - The hourly output is saved to projects/<name>/outputs/simulation_hourly.csv
+    - The timestep output is saved to projects/<name>/outputs/simulation_timesteps.csv
 
 Step 4 — Run this script:
     python tests/homer_pro_vs_our_model.py
@@ -77,8 +77,8 @@ if ROOT not in sys.path:
 # Path to HOMER Pro exported hourly CSV
 HOMER_HOURLY_CSV = Path("tests/homer_export/homer_hourly.csv")
 
-# Path to our model's hourly output CSV
-OUR_HOURLY_CSV = Path("projects/test_3/outputs/simulation_hourly.csv")
+# Path to our model's timestep output CSV
+OUR_TIMESTEP_CSV = Path("projects/test_3/outputs/simulation_timesteps.csv")
 
 # HOMER Pro summary numbers (read from the Results table manually)
 HOMER_SUMMARY = {
@@ -150,13 +150,13 @@ def load_both_csvs() -> tuple[pd.DataFrame, pd.DataFrame]:
         print(_safe(f"  Save to: {HOMER_HOURLY_CSV}"))
         return pd.DataFrame(), pd.DataFrame()
 
-    if not OUR_HOURLY_CSV.exists():
-        print(_safe(f"\n  [SKIP] Our model output not found at: {OUR_HOURLY_CSV}"))
+    if not OUR_TIMESTEP_CSV.exists():
+        print(_safe(f"\n  [SKIP] Our model output not found at: {OUR_TIMESTEP_CSV}"))
         print(_safe(f"  Run: python -m core.simulation.run_project_simulation test_3"))
         return pd.DataFrame(), pd.DataFrame()
 
     homer_df = pd.read_csv(HOMER_HOURLY_CSV)
-    our_df = pd.read_csv(OUR_HOURLY_CSV)
+    our_df = pd.read_csv(OUR_TIMESTEP_CSV)
 
     # Rename HOMER columns to our naming convention
     rename = {k: v for k, v in HOMER_COL_MAP.items() if k in homer_df.columns}

@@ -4,7 +4,7 @@ from __future__ import annotations
 # core/simulation/grid_model.py
 #
 # Purpose:
-#   Grid interaction model for hourly hybrid simulation.
+#   Grid interaction model for timestep-based hybrid simulation.
 #
 # What this file does:
 #   1. Resolve grid limits from config (import / export capacity)

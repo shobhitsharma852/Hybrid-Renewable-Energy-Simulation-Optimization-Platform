@@ -8,7 +8,7 @@ from core.optimization.constraints import (
 )
 from core.optimization.design_point import DesignPoint
 from core.simulation.results import (
-    HourlySimulationRecord,
+    SimulationTimestepRecord,
     SimulationResults,
     SimulationSummary,
 )
@@ -36,9 +36,9 @@ def test_battery_operating_reserve_probe_uses_effective_capacity():
         converter_capacity_kw=1000.0,
     )
     results = SimulationResults(
-        hourly_records=[
-            HourlySimulationRecord(
-                hour_index=0,
+        timestep_records=[
+            SimulationTimestepRecord(
+                step_index=0,
                 timestamp=None,
                 load_kw=100.0,
                 pv_kw=0.0,

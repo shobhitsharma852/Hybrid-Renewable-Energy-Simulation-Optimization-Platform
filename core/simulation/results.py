@@ -5,8 +5,10 @@ import pandas as pd
 
 
 @dataclass
-class HourlySimulationRecord:
-    hour_index: int
+class SimulationTimestepRecord:
+    """Simulation outputs for one timestep, regardless of timestep duration."""
+
+    step_index: int
     timestamp: pd.Timestamp | None
     load_kw: float
     pv_kw: float
@@ -43,6 +45,39 @@ class HourlySimulationRecord:
     #   Reference: IEC 62619, manufacturer datasheets.
     effective_capacity_kwh: float = 0.0
     soh_pct: float = 100.0
+
+    @property
+    def hour_index(self) -> int:
+        """Deprecated compatibility alias; use ``step_index`` instead."""
+        return self.step_index
+
+
+class HourlySimulationRecord(SimulationTimestepRecord):
+    """Deprecated constructor-compatible name for ``SimulationTimestepRecord``."""
+
+    def __init__(
+        self,
+        *args,
+        hour_index: int | None = None,
+        step_index: int | None = None,
+        **kwargs,
+    ) -> None:
+        if args:
+            if hour_index is not None or step_index is not None:
+                raise TypeError(
+                    "Do not combine a positional index with hour_index or step_index."
+                )
+            super().__init__(*args, **kwargs)
+            return
+
+        if hour_index is not None and step_index is not None:
+            raise TypeError("Provide hour_index or step_index, not both.")
+
+        resolved_index = step_index if step_index is not None else hour_index
+        if resolved_index is None:
+            raise TypeError("Missing required argument: step_index")
+
+        super().__init__(step_index=resolved_index, **kwargs)
 
 
 @dataclass
@@ -92,17 +127,46 @@ class SimulationSummary:
     max_battery_soc_pct: float = 0.0
 
     # Battery health at end of simulation year.
-    # final_soh_pct: State of Health (%) of the last hourly record — shows how much
+    # final_soh_pct: State of Health (%) of the last timestep record — shows how much
     #   capacity the battery has lost to all aging mechanisms combined.
     # min_effective_capacity_kwh: lowest usable capacity seen during the year.
     final_soh_pct: float = 100.0
     min_effective_capacity_kwh: float = 0.0
 
 
-@dataclass
+@dataclass(init=False)
 class SimulationResults:
-    hourly_records: list[HourlySimulationRecord] = field(default_factory=list)
+    timestep_records: list[SimulationTimestepRecord] = field(default_factory=list)
     summary: SimulationSummary = field(default_factory=SimulationSummary)
 
+    def __init__(
+        self,
+        timestep_records: list[SimulationTimestepRecord] | None = None,
+        summary: SimulationSummary | None = None,
+        *,
+        hourly_records: list[SimulationTimestepRecord] | None = None,
+    ) -> None:
+        """
+        Store per-timestep results.
+
+        ``hourly_records`` remains accepted for compatibility with older callers,
+        but new code should use ``timestep_records``.
+        """
+        if timestep_records is not None and hourly_records is not None:
+            raise ValueError("Provide timestep_records or hourly_records, not both.")
+
+        records = timestep_records if timestep_records is not None else hourly_records
+        self.timestep_records = list(records) if records is not None else []
+        self.summary = summary if summary is not None else SimulationSummary()
+
+    @property
+    def hourly_records(self) -> list[SimulationTimestepRecord]:
+        """Deprecated compatibility alias; use ``timestep_records`` instead."""
+        return self.timestep_records
+
+    @hourly_records.setter
+    def hourly_records(self, value: list[SimulationTimestepRecord]) -> None:
+        self.timestep_records = value
+
     def to_dataframe(self) -> pd.DataFrame:
-        return pd.DataFrame([asdict(record) for record in self.hourly_records])
+        return pd.DataFrame([asdict(record) for record in self.timestep_records])

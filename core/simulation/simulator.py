@@ -21,9 +21,9 @@ from .battery_soc import (
 )
 from .pv_model import compute_pv_power_from_resource_row
 from .results import (
-    HourlySimulationRecord,
     SimulationResults,
     SimulationSummary,
+    SimulationTimestepRecord,
 )
 from .wind_model import (
     compute_wind_power_output,
@@ -36,7 +36,7 @@ EPSILON: float = 1e-9
 
 
 @dataclass
-class SimulationInputs:
+class SimulationInputs:                            # This dataclass holds all the inputs needed to run a hybrid system simulation. It includes the load and resource data, component configurations, design point, time step, dispatch strategy, and optional geographic information.
     load_df: pd.DataFrame
     resource_df: pd.DataFrame
     components: ComponentsConfig
@@ -48,7 +48,7 @@ class SimulationInputs:
     timezone_offset_hours: float = 0.0
 
 
-class HybridSystemSimulator:
+class HybridSystemSimulator:                        # Take all the system inputs and simulate the hybrid renewable-energy system timestep by timestep.
     def __init__(self, inputs: SimulationInputs):
         self.inputs = inputs
 
@@ -65,8 +65,8 @@ class HybridSystemSimulator:
                 f"before simulation; got load={len(load_df)} and resources={len(resource_df)}"
             )
 
-        n = len(load_df)
-        hourly_records: list[HourlySimulationRecord] = []
+        n_steps = len(load_df)
+        timestep_records: list[SimulationTimestepRecord] = []
 
         # Initialise mutable battery runtime state once, then carry it step-to-step
         # via dispatch.updated_battery_state.  Using a dataclass rather than a bare
@@ -145,10 +145,10 @@ class HybridSystemSimulator:
         total_direct_renewable_to_load_kwh = 0.0
         total_renewable_from_battery_to_load_kwh = 0.0
 
-        for hour_index in range(n):
-            load_kw = self._get_load_kw(load_df, hour_index)
-            pv_kw = self._get_pv_kw(resource_df, hour_index, components)
-            wind_kw = self._get_wind_kw(resource_df, hour_index, components)
+        for step_index in range(n_steps):
+            load_kw = self._get_load_kw(load_df, step_index)
+            pv_kw = self._get_pv_kw(resource_df, step_index, components)
+            wind_kw = self._get_wind_kw(resource_df, step_index, components)
 
             # Save SOC before dispatch — needed for half-cycle direction-reversal detection.
             pre_dispatch_soc_pct = battery_state.soc_pct
@@ -159,9 +159,9 @@ class HybridSystemSimulator:
                 (battery_enabled and components.battery.consider_temperature_effects)
                 or use_arrhenius
             ):
-                hour_temp_c: float | None = float(resource_df.iloc[hour_index]["temperature"])
+                step_temp_c: float | None = float(resource_df.iloc[step_index]["temperature"])
             else:
-                hour_temp_c = None
+                step_temp_c = None
 
             # Temperature capacity correction (Step 2 of HOMER Pro ASM aging model).
             # This is REVERSIBLE — it adjusts the usable capacity for this hour only.
@@ -170,10 +170,10 @@ class HybridSystemSimulator:
             if (
                 battery_enabled
                 and components.battery.consider_temperature_effects
-                and hour_temp_c is not None
+                and step_temp_c is not None
             ):
                 temp_factor = compute_temperature_correction_factor(
-                    ambient_temperature_c=hour_temp_c,
+                    ambient_temperature_c=step_temp_c,
                     d0=components.battery.capacity_temp_d0,
                     d1=components.battery.capacity_temp_d1,
                     d2=components.battery.capacity_temp_d2,
@@ -248,18 +248,18 @@ class HybridSystemSimulator:
 
             # --- Calendar fade accumulation ---
             # Arrhenius path: scale the base rate by exp(Ea/kB × (1/T_ref − 1/T)) each step.
-            # Fixed-rate path: rate × elapsed_years (computed fresh each step from hour_index).
-            if use_arrhenius and hour_temp_c is not None:
+            # Fixed-rate path: rate × elapsed_years (computed fresh from step_index).
+            if use_arrhenius and step_temp_c is not None:
                 step_rate = compute_arrhenius_calendar_rate(
                     base_calendar_fade_pct_per_year=components.battery.calendar_fade_pct_per_year,
-                    ambient_temperature_c=hour_temp_c,
+                    ambient_temperature_c=step_temp_c,
                     activation_energy_ev=components.battery.arrhenius_ea_ev,
                     reference_temperature_c=components.battery.temperature_reference_c,
                 )
                 cumulative_arrhenius_calendar_pct += step_rate * dt / 8760.0
                 cumulative_calendar_fade_pct = cumulative_arrhenius_calendar_pct
             else:
-                elapsed_years = (hour_index + 1) * dt / 8760.0
+                elapsed_years = (step_index + 1) * dt / 8760.0
                 cumulative_calendar_fade_pct = (
                     components.battery.calendar_fade_pct_per_year * elapsed_years
                 )
@@ -321,10 +321,10 @@ class HybridSystemSimulator:
 
             total_renewable_from_battery_to_load_kwh += renewable_battery_discharge_kwh
 
-            hourly_records.append(
-                HourlySimulationRecord(
-                    hour_index=hour_index,
-                    timestamp=self._get_step_timestamp(load_df, resource_df, hour_index),
+            timestep_records.append(
+                SimulationTimestepRecord(
+                    step_index=step_index,
+                    timestamp=self._get_step_timestamp(load_df, resource_df, step_index),
                     load_kw=load_kw,
                     pv_kw=pv_kw,
                     wind_kw=wind_kw,
@@ -348,7 +348,7 @@ class HybridSystemSimulator:
                     rectifier_input_ac_kw=dispatch.rectifier_input_ac_kw,
                     rectifier_output_dc_kw=dispatch.rectifier_output_dc_kw,
                     # Battery health — taken from post-fade battery_state so the
-                    # hourly DataFrame captures the degradation curve over the year.
+                    # timestep DataFrame captures the degradation curve over the year.
                     # effective_capacity_kwh drifts down from nominal as SoH falls.
                     effective_capacity_kwh=battery_state.effective_capacity_kwh,
                     soh_pct=battery_state.soh_pct,
@@ -356,13 +356,13 @@ class HybridSystemSimulator:
             )
 
         summary = self._build_summary(
-            hourly_records=hourly_records,
+            timestep_records=timestep_records,
             total_direct_renewable_to_load_kwh=total_direct_renewable_to_load_kwh,
             total_renewable_from_battery_to_load_kwh=total_renewable_from_battery_to_load_kwh,
         )
 
         return SimulationResults(
-            hourly_records=hourly_records,
+            timestep_records=timestep_records,
             summary=summary,
         )
 
@@ -370,25 +370,25 @@ class HybridSystemSimulator:
         self,
         load_df: pd.DataFrame,
         resource_df: pd.DataFrame,
-        hour_index: int,
+        step_index: int,
     ) -> pd.Timestamp | None:
         if "timestamp" in load_df.columns:
-            return pd.Timestamp(load_df.iloc[hour_index]["timestamp"])
+            return pd.Timestamp(load_df.iloc[step_index]["timestamp"])
         if "timestamp" in resource_df.columns:
-            return pd.Timestamp(resource_df.iloc[hour_index]["timestamp"])
+            return pd.Timestamp(resource_df.iloc[step_index]["timestamp"])
         return None
 
-    def _get_load_kw(self, load_df: pd.DataFrame, hour_index: int) -> float:
+    def _get_load_kw(self, load_df: pd.DataFrame, step_index: int) -> float:
         if "load_kw" in load_df.columns:
-            return float(load_df.iloc[hour_index]["load_kw"])
+            return float(load_df.iloc[step_index]["load_kw"])
         if "load" in load_df.columns:
-            return float(load_df.iloc[hour_index]["load"])
+            return float(load_df.iloc[step_index]["load"])
         raise ValueError("Load dataframe must contain 'load_kw' or 'load' column.")
 
     def _get_pv_kw(
         self,
         resource_df: pd.DataFrame,
-        hour_index: int,
+        step_index: int,
         components: ComponentsConfig,
     ) -> float:
         if not components.pv.enabled:
@@ -398,7 +398,7 @@ class HybridSystemSimulator:
         if selected_pv_capacity_kw <= 0.0:
             return 0.0
 
-        row = resource_df.iloc[hour_index]
+        row = resource_df.iloc[step_index]
 
         result = compute_pv_power_from_resource_row(
             resource_row=row,
@@ -417,7 +417,7 @@ class HybridSystemSimulator:
     def _get_wind_kw(
         self,
         resource_df: pd.DataFrame,
-        hour_index: int,
+        step_index: int,
         components: ComponentsConfig,
     ) -> float:
         if not components.wind.enabled:
@@ -427,7 +427,7 @@ class HybridSystemSimulator:
         if quantity <= 0:
             return 0.0
 
-        row = resource_df.iloc[hour_index]
+        row = resource_df.iloc[step_index]
 
         wind_speed_ref_mps = (
             float(row["ws50m"])
@@ -469,14 +469,14 @@ class HybridSystemSimulator:
     def _build_summary(
         self,
         *,
-        hourly_records: list[HourlySimulationRecord],
+        timestep_records: list[SimulationTimestepRecord],
         total_direct_renewable_to_load_kwh: float,
         total_renewable_from_battery_to_load_kwh: float,
     ) -> SimulationSummary:
         summary = SimulationSummary()
         dt = self.inputs.time_step_hours
 
-        for r in hourly_records:
+        for r in timestep_records:
             summary.total_load_kwh += r.load_kw * dt
             summary.total_served_load_kwh += r.served_load_kw * dt
             summary.total_unmet_load_kwh += r.unmet_load_kw * dt
@@ -522,17 +522,17 @@ class HybridSystemSimulator:
         summary.total_capacity_shortage_kwh = summary.total_unmet_load_kwh
         summary.annual_capacity_shortage_pct = summary.unmet_load_fraction_pct
 
-        if hourly_records:
-            battery_soc_values = [float(r.battery_soc_pct) for r in hourly_records]
+        if timestep_records:
+            battery_soc_values = [float(r.battery_soc_pct) for r in timestep_records]
             summary.final_battery_soc_pct = battery_soc_values[-1]
             summary.min_battery_soc_pct = min(battery_soc_values)
             summary.max_battery_soc_pct = max(battery_soc_values)
 
-            # Battery health — populated from HourlySimulationRecord fields written by
+            # Battery health — populated from SimulationTimestepRecord fields written by
             # apply_capacity_fade() each step.  Useful for multi-year projects to show
             # how much calendar and cycling degradation occurred over the simulated period.
-            soh_values = [float(r.soh_pct) for r in hourly_records]
-            cap_values = [float(r.effective_capacity_kwh) for r in hourly_records]
+            soh_values = [float(r.soh_pct) for r in timestep_records]
+            cap_values = [float(r.effective_capacity_kwh) for r in timestep_records]
             summary.final_soh_pct = soh_values[-1]
             summary.min_effective_capacity_kwh = min(cap_values)
 
