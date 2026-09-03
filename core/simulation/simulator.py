@@ -120,9 +120,11 @@ class HybridSystemSimulator:                        # Take all the system inputs
         if use_dod_model:
             # DoD model handles cycle aging — disable EFC fade.
             cycle_fade_pct_per_efc = 0.0
+
         elif battery_enabled and nominal_kwh_per_string > 0.0 and _rdl > 0.0:
             efc_to_eol = components.battery.throughput_kwh / (2.0 * nominal_kwh_per_string)
             cycle_fade_pct_per_efc = _rdl / efc_to_eol if efc_to_eol > 0.0 else 0.0
+
         else:
             # Battery disabled, zero throughput, or zero degradation limit → no fade.
             cycle_fade_pct_per_efc = 0.0
@@ -146,8 +148,8 @@ class HybridSystemSimulator:                        # Take all the system inputs
         total_renewable_from_battery_to_load_kwh = 0.0
 
         for step_index in range(n_steps):
-            load_kw = self._get_load_kw(load_df, step_index)
-            pv_kw = self._get_pv_kw(resource_df, step_index, components)
+            load_kw = self._get_load_kw(load_df, step_index)                  #for every timestep, get the load in kW from the load dataframe
+            pv_kw = self._get_pv_kw(resource_df, step_index, components)      #for every timestep, get the PV power in kW from the resource dataframe and components configuration
             wind_kw = self._get_wind_kw(resource_df, step_index, components)
 
             # Save SOC before dispatch — needed for half-cycle direction-reversal detection.
@@ -398,7 +400,7 @@ class HybridSystemSimulator:                        # Take all the system inputs
         if selected_pv_capacity_kw <= 0.0:
             return 0.0
 
-        row = resource_df.iloc[step_index]
+        row = resource_df.iloc[step_index]       #get the resource data for the current timestep from the resource dataframe
 
         result = compute_pv_power_from_resource_row(
             resource_row=row,

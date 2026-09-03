@@ -1,8 +1,8 @@
 {
   "meta": {
-    "name": "jsw",
-    "author": "Shobhit Sharma",
-    "description": "JSW PV-only one-minute SCADA validation project for comparison with the Python model and HOMER Pro.",
+    "name": "karnataka_wind_generation",
+    "author": "Shobhit",
+    "description": "Calculate the Wind Generation.",
     "currency_symbol": "\u20b9",
     "currency_name": "INR"
   },
@@ -21,6 +21,6 @@
     "scaled_annual_energy_kwh": null
   },
   "version": "1.0",
-  "simulation_time_step_minutes": 1,
+  "simulation_time_step_minutes": 60,
   "dispatch_strategy": "renewable_first"
 }

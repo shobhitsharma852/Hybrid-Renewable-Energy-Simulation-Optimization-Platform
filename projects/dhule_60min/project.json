@@ -1,9 +1,9 @@
 {
   "meta": {
-    "name": "dhule_2",
-    "author": "nm",
+    "name": "dhule_60min",
+    "author": "Shobhit Sharma",
     "description": "Dhule INR hybrid PV-wind-grid-converter-BESS validation case",
-    "currency_symbol": "₹",
+    "currency_symbol": "\u20b9",
     "currency_name": "INR"
   },
   "location": {
@@ -21,6 +21,6 @@
     "scaled_annual_energy_kwh": null
   },
   "version": "1.0",
-  "simulation_time_step_minutes": 20,
+  "simulation_time_step_minutes": 60,
   "dispatch_strategy": "renewable_first"
 }
