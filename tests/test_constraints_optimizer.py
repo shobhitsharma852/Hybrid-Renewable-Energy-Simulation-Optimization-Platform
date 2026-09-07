@@ -15,7 +15,7 @@ def main():
     print(
         df[
             [
-                "technical_rank",
+                "economic_rank",
                 "candidate_id",
                 "pv_capacity_kw",
                 "wind_quantity",

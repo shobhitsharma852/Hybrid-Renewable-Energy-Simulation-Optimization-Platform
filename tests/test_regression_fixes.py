@@ -264,7 +264,6 @@ def test_optimization_best_solution_summary_identifies_key_winners():
     assert summary["best_feasible"] is not None
     assert summary["lowest_npc"] is not None
     assert summary["lowest_lcoe"] is not None
-    assert summary["technical_best"] is not None
 
     best_feasible = summary["best_feasible"]
     assert isinstance(best_feasible, dict)

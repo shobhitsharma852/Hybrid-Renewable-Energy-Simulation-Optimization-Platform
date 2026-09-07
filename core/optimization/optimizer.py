@@ -158,7 +158,7 @@ class OptimizationSweepResult:                                           #Candid
                 }
             )
 
-        df = pd.DataFrame(rows)
+        df = pd.DataFrame(rows)                 #This code converts all optimization-candidate results into a table
 
         if df.empty:
             return df
@@ -176,7 +176,6 @@ class OptimizationSweepResult:                                           #Candid
         ).reset_index(drop=True)
 
         df.insert(0, "economic_rank", range(1, len(df) + 1))
-        df.insert(1, "technical_rank", range(1, len(df) + 1))
         return df
 
     def top_n(self, n: int = 10) -> pd.DataFrame:
@@ -194,7 +193,6 @@ class OptimizationSweepResult:                                           #Candid
             "best_feasible": None,
             "lowest_npc": None,
             "lowest_lcoe": None,
-            "technical_best": None,
         }
 
         if df.empty:
@@ -234,18 +232,6 @@ class OptimizationSweepResult:                                           #Candid
                 ascending=[True, True],
             )
             summary["lowest_lcoe"] = _row_summary(lowest_lcoe_df.iloc[0])
-
-        if not successful_df.empty:
-            technical_df = successful_df.sort_values(
-                by=[
-                    "annual_capacity_shortage_pct",
-                    "reserve_shortfall_hours",
-                    "renewable_fraction_pct",
-                    "net_present_cost",
-                ],
-                ascending=[True, True, False, True],
-            )
-            summary["technical_best"] = _row_summary(technical_df.iloc[0])
 
         return summary
 

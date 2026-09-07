@@ -138,7 +138,6 @@ def _prepare_display_df(df: pd.DataFrame) -> pd.DataFrame:
 
     expected_numeric = [
         "economic_rank",
-        "technical_rank",
         "candidate_id",
         "pv_capacity_kw",
         "wind_quantity",
