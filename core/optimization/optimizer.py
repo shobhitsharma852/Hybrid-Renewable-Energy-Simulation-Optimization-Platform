@@ -163,9 +163,9 @@ class OptimizationSweepResult:                                           #Candid
         if df.empty:
             return df
 
-        df = df.sort_values(
+        df = df.sort_values(                    # sorting the dataframe based on multiple criteria.
             by=[
-                "run_success",
+                "run_success",            # Candidate simulation without encountering any software or runtime errors is considered a successful run. 
                 "is_feasible",
                 "net_present_cost",
                 "levelized_cost_of_energy",
@@ -240,7 +240,7 @@ class OptimizationSweepResult:                                           #Candid
 # WORKER FUNCTIONS (module-level — required for Windows spawn pickling)
 # ============================================================
 
-# Each worker process stores shared simulation inputs here after _worker_init runs.
+# Each worker process stores shared simulation inputs here after _worker_init runs.  Worker is like an employee and simulation is like task. Suppose there are 4 workers then after completing task or simulation 1 , worker 1 will take the task 5 or simulation 5.
 _worker_context: dict = {}
 
 

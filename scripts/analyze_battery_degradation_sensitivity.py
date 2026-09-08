@@ -265,7 +265,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run non-destructive battery degradation sensitivity scenarios."
     )
-    parser.add_argument("--project", default="dhule_60min")
+    parser.add_argument("--project", default="dhule")
     parser.add_argument(
         "--output",
         type=Path,

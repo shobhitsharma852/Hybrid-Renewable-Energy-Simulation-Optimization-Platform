@@ -1,6 +1,6 @@
 {
   "meta": {
-    "name": "dhule_60min",
+    "name": "dhule",
     "author": "Shobhit Sharma",
     "description": "Dhule INR hybrid PV-wind-grid-converter-BESS validation case",
     "currency_symbol": "\u20b9",
